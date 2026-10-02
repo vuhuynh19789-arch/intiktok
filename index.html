@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    
+    <!-- PWA meta tags -->
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="In Live">
+    <meta name="application-name" content="In Live">
+    <meta name="theme-color" content="#0f172a">
+    
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="/pwa-192x192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="/pwa-512x512.png">
+    
+    <meta name="description" content="Ứng dụng chốt đơn livestream đa nền tảng và tự động cào dữ liệu bình luận TikTok Live theo thời gian thực" />
+    <meta property="og:title" content="In Live Đa Nền Tảng" />
+    <meta property="og:description" content="Ứng dụng chốt đơn livestream đa nền tảng và tự động cào dữ liệu bình luận TikTok Live theo thời gian thực" />
+    <title>In Live Đa Nền Tảng</title>
+    <script>
+      (function() {
+        var pattern = /(ResizeObserver loop (limit exceeded|completed with undelivered notifications)|flushSync was called from inside a lifecycle method)/i;
+        window.addEventListener('error', function(e) {
+          if (e && e.message && pattern.test(e.message)) {
+            e.stopImmediatePropagation();
+            e.preventDefault();
+          }
+        }, true);
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').then(reg => {
+            console.log('SW registered!', reg);
+            reg.update().catch(() => {});
+          }).catch(err => console.log('SW reg failed', err));
+        });
+      }
+    </script>
+  </body>
+</html>

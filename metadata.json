@@ -1,0 +1,8 @@
+{
+  "name": "in live da nen tang",
+  "description": "Ứng dụng chốt đơn livestream đa nền tảng và tự động cào dữ liệu bình luận TikTok Live theo thời gian thực",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
