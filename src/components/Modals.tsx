@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { PlusCircle, Plus, Clipboard, Smartphone, Phone, MapPin, ShoppingBag, Package, Sparkles, RefreshCw, ChevronDown, ChevronUp, Calendar, Truck, ExternalLink, Edit3, LayoutGrid, List, Calculator, Minus, Printer, Trash2, Check, RotateCcw, Hash, Tag, Receipt } from 'lucide-react';
-import { useStore, CustomerData, OrderItem, deduplicateOrderItems } from '../store';
+import { useStore, CustomerData, OrderItem, deduplicateOrderItems, getCustomerAvatar } from '../store';
 import { PLATFORMS, printLabel, printBill, getShortId, Platform, normalizeUser, getLastClosedPrice, getRecentSearchPrices, getRecentClosedPrices } from '../lib/core';
 import { CustomerAvatar } from './UserAvatar';
 import { openPancakeApp, parsePancakeContact } from '../lib/pancakeDeepLink';
@@ -64,6 +64,178 @@ function DeleteConfirmButton({ onDelete, className = "" }: { onDelete: () => voi
     );
 }
 
+export interface EditingPriceQtyTarget {
+    platform: Platform;
+    user: string;
+    itemIndex: number;
+    content: string;
+    unitPrice: number;
+    quantity: number;
+    isPast?: boolean;
+}
+
+export function QuickPriceQtyModal({
+    target,
+    onClose
+}: {
+    target: EditingPriceQtyTarget | null;
+    onClose: () => void;
+}) {
+    if (!target) return null;
+    const store = useStore();
+    const [price, setPrice] = useState<number | string>(target.unitPrice);
+    const [qty, setQty] = useState<number>(target.quantity || 1);
+
+    const numericPrice = typeof price === 'number' ? price : (parseInt(String(price).replace(/\D/g, '')) || 0);
+    const currentTotalK = numericPrice * (qty || 1);
+
+    const handleSave = () => {
+        store.updateOrderItemPriceAndQuantity(
+            target.platform,
+            target.user,
+            target.itemIndex,
+            numericPrice,
+            qty,
+            target.isPast
+        );
+        onClose();
+    };
+
+    return (
+        <div 
+            className="fixed inset-0 z-[9999] bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+            onClick={onClose}
+        >
+            <div 
+                className="bg-[#0f172a] border border-cyan-500/40 w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden p-5 space-y-4"
+                onClick={e => e.stopPropagation()}
+            >
+                {/* Header */}
+                <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                    <div className="flex items-center gap-2">
+                        <span className="text-xl">⚡</span>
+                        <h3 className="font-bold text-white text-base">Sửa Giá × Số Lượng</h3>
+                    </div>
+                    <button 
+                        onClick={onClose}
+                        className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors text-sm font-bold cursor-pointer"
+                    >
+                        ✕
+                    </button>
+                </div>
+
+                {/* Comment content */}
+                <div className="bg-[#1e293b]/70 rounded-xl p-3 border border-white/5">
+                    <div className="text-[11px] text-gray-400 font-medium mb-1">Nội dung cmt khách:</div>
+                    <div className="font-bold text-amber-300 text-sm break-words flex items-start gap-1.5">
+                        <span className="text-gray-400 shrink-0">💬</span>
+                        <span>{target.content}</span>
+                    </div>
+                </div>
+
+                {/* Chỉnh Giá đơn vị (k) */}
+                <div>
+                    <label className="text-xs text-gray-300 font-bold block mb-1.5">
+                        Đơn giá (k = nghìn VNĐ):
+                    </label>
+                    <div className="relative">
+                        <input
+                            type="number"
+                            inputMode="numeric"
+                            value={price}
+                            onChange={(e) => setPrice(e.target.value === '' ? '' : Math.max(0, parseInt(e.target.value) || 0))}
+                            className="w-full bg-[#0b131e] border border-white/20 rounded-xl py-2 px-3 text-cyan-300 font-mono font-bold text-lg text-right pr-9 focus:border-cyan-400 focus:outline-none focus:ring-1 focus:ring-cyan-400"
+                            placeholder="0"
+                        />
+                        <span className="absolute right-3 top-2.5 text-gray-400 font-mono font-bold text-sm">k</span>
+                    </div>
+                </div>
+
+                {/* Chỉnh Số lượng (SL) */}
+                <div>
+                    <label className="text-xs text-gray-300 font-bold block mb-1.5">
+                        Số lượng (SL):
+                    </label>
+                    <div className="flex items-center justify-between bg-[#0b131e] border border-white/20 rounded-xl p-1.5">
+                        <button
+                            type="button"
+                            onClick={() => setQty(prev => Math.max(1, prev - 1))}
+                            disabled={qty <= 1}
+                            className="w-12 h-11 rounded-lg bg-white/5 hover:bg-white/10 active:scale-95 disabled:opacity-30 flex items-center justify-center font-bold text-xl text-gray-200 cursor-pointer transition-all"
+                            title="Giảm 1"
+                        >
+                            -
+                        </button>
+                        <div className="flex-1 text-center font-mono font-black text-2xl text-emerald-400">
+                            {qty}
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => setQty(prev => prev + 1)}
+                            className="w-12 h-11 rounded-lg bg-emerald-600 hover:bg-emerald-500 active:scale-95 flex items-center justify-center font-bold text-xl text-white cursor-pointer transition-all shadow-md shadow-emerald-950"
+                            title="Tăng 1"
+                        >
+                            +
+                        </button>
+                    </div>
+
+                    {/* Hàng nút số lượng nhanh: 1, 2, 3, 4, 5, 6, 10 */}
+                    <div className="flex items-center gap-1.5 mt-2">
+                        {[1, 2, 3, 4, 5, 6, 10].map(n => (
+                            <button
+                                key={n}
+                                type="button"
+                                onClick={() => setQty(n)}
+                                className={`flex-1 py-1.5 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer ${
+                                    qty === n 
+                                        ? 'bg-cyan-500 text-black shadow-md shadow-cyan-900/50 scale-105' 
+                                        : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                                }`}
+                            >
+                                {n}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                {/* Tổng thành tiền preview */}
+                <div className="bg-gradient-to-r from-emerald-950/60 to-cyan-950/60 border border-emerald-500/30 rounded-xl p-3 flex items-center justify-between">
+                    <div>
+                        <div className="text-[11px] text-gray-400 uppercase font-mono">Công thức</div>
+                        <div className="font-mono text-cyan-300 font-bold text-sm">
+                            {numericPrice}k × {qty}
+                        </div>
+                    </div>
+                    <div className="text-right">
+                        <div className="text-[11px] text-gray-400 uppercase font-mono">Thành tiền</div>
+                        <div className="font-mono text-emerald-400 font-black text-xl">
+                            {currentTotalK}k <span className="text-xs font-normal text-gray-300">({(currentTotalK * 1000).toLocaleString('vi-VN')}đ)</span>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Nút hành động */}
+                <div className="flex items-center gap-2 pt-1">
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        className="flex-1 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-gray-300 font-bold text-sm cursor-pointer transition-colors"
+                    >
+                        Hủy
+                    </button>
+                    <button
+                        type="button"
+                        onClick={handleSave}
+                        className="flex-2 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-98 text-white font-black text-sm flex items-center justify-center gap-1.5 cursor-pointer shadow-lg shadow-emerald-900/40 transition-all"
+                    >
+                        <span>✓ Cập nhật</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 import { ItemCalculatorModal, parseOrderFormula } from './ItemCalculatorModal';
 export type { ParsedCalculatorItem } from './ItemCalculatorModal';
 export { ItemCalculatorModal, parseOrderFormula };
@@ -81,11 +253,9 @@ export function PriceModal({ pendingPrint, onClose }: { pendingPrint: { id: stri
 
     // Priority for initial price to jump right into input:
     // 1. defaultPrice (from comment extracted price)
-    // 2. flowPrice (from host price)
-    // 3. lastClosed (giá chốt gần nhất - nhảy vào ô nhập giá luôn)
-    // 4. searchPrices[0] (giá gần nhất nhập ở ô tìm kiếm)
+    // 2. lastClosed (giá chốt gần nhất - nhảy vào ô nhập giá luôn)
+    // 3. searchPrices[0] (giá gần nhất nhập ở ô tìm kiếm)
     const initialPrice = pendingPrint.defaultPrice 
-        || (flowPrice?.price ? flowPrice.price : '') 
         || (lastClosed ? lastClosed : '')
         || (searchPrices.length > 0 ? searchPrices[0] : '');
 
@@ -284,26 +454,8 @@ export function PriceModal({ pendingPrint, onClose }: { pendingPrint: { id: stri
                     </div>
                     
                     <div className="flex items-center gap-1.5 flex-wrap">
-                        {/* Host Flow Price Button */}
-                        {flowPrice?.price && (
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    setPrice(flowPrice.price);
-                                    setTimeout(() => {
-                                        inputRef.current?.focus();
-                                        inputRef.current?.select();
-                                    }, 50);
-                                }}
-                                className="px-2.5 py-1 rounded-lg bg-yellow-500/20 hover:bg-yellow-500/35 border border-yellow-500/50 text-yellow-300 font-black text-xs inline-flex items-center gap-1 cursor-pointer transition-all active:scale-95 shadow-xs"
-                                title="Giá do Host gợi ý trên live"
-                            >
-                                <span>👑 Host: {flowPrice.price}k</span>
-                            </button>
-                        )}
-
                         {/* Last Closed Price Button */}
-                        {lastClosed && lastClosed !== flowPrice?.price && (
+                        {lastClosed && (
                             <button
                                 type="button"
                                 onClick={() => {
@@ -341,7 +493,7 @@ export function PriceModal({ pendingPrint, onClose }: { pendingPrint: { id: stri
 
                         {/* Other Recent Closed Prices if not in list */}
                         {recentClosedPrices
-                            .filter(rp => rp !== lastClosed && rp !== flowPrice?.price && !searchPrices.includes(rp))
+                            .filter(rp => rp !== lastClosed && !searchPrices.includes(rp))
                             .slice(0, 2)
                             .map((rp, idx) => (
                                 <button
@@ -358,8 +510,7 @@ export function PriceModal({ pendingPrint, onClose }: { pendingPrint: { id: stri
                                 >
                                     <span>{rp}k</span>
                                 </button>
-                            ))
-                        }
+                            ))}
                     </div>
                 </div>
 
@@ -547,9 +698,11 @@ export function ManualModal({ onClose, onOpenProfile, isPage }: { onClose: () =>
 export function ListModal({ filterPlatform, onClose, onOpenProfile, onOpenPrice, onOpenPancakeLink, isPage, onScroll, onSetFilter, searchKeyword = '' }: { filterPlatform?: Platform, onClose: () => void, onOpenProfile: (u: string, p: Platform) => void, onOpenPrice?: (id: string | null, u: string, p: Platform) => void, onOpenPancakeLink?: (user: string, platform: Platform, initialSearch?: string) => void, isPage?: boolean, onScroll?: (isDown: boolean) => void, onSetFilter?: (p: Platform | undefined) => void, searchKeyword?: string }) {
     const store = useStore();
     const [listSearch, setListSearch] = useState('');
+    const [editingPriceQty, setEditingPriceQty] = useState<EditingPriceQtyTarget | null>(null);
     const [sortBy, setSortBy] = useState<'newest' | 'count' | 'revenue'>('newest');
     const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'yesterday' | '7days' | 'custom'>('all');
     const [customDate, setCustomDate] = useState<string>('');
+    const [activeDropdown, setActiveDropdown] = useState<'platform' | 'date' | 'sort' | null>(null);
     const [viewMode, setViewMode] = useState<'list' | 'grid'>(() => {
         try {
             return (localStorage.getItem('slp_cart_view_mode') as 'list' | 'grid') || 'list';
@@ -616,90 +769,95 @@ export function ListModal({ filterPlatform, onClose, onOpenProfile, onOpenPrice,
         setLastScrollY(currentY);
     };
     
-    let allRows: {user: string, platform: Platform, c: CustomerData, displayItems: OrderItem[], originalIndices: number[]}[] = [];
-    (['tiktok', 'facebook', 'shopee'] as Platform[]).forEach(p => {
-        if (filterPlatform && p !== filterPlatform) return;
-        const custs = store[p].customers;
-        Object.keys(custs).forEach(rawUser => {
-            const user = normalizeUser(rawUser);
-            const cust = custs[rawUser];
-            if (!cust) return;
-
-            // 1. Loại bỏ đơn hàng / sản phẩm trùng lặp ID (đảm bảo mỗi ID chỉ hiển thị 1 lần duy nhất trong giỏ hàng)
-            const uniqueCurrent = deduplicateOrderItems(cust.items || []);
-            const uniquePast = deduplicateOrderItems(cust.pastItems || []);
-
-            let displayItems: OrderItem[] = [];
-            let originalIndices: number[] = [];
-
-            if (dateFilter === 'all') {
-                displayItems = uniqueCurrent;
-                originalIndices = uniqueCurrent.map((_, i) => i);
-            } else {
-                // Khi lọc theo ngày: lọc các món trong phiên này và cả phiên cũ phù hợp với ngày được chọn
-                const allItems = [...uniqueCurrent, ...uniquePast];
-                displayItems = allItems.filter(it => isTimestampInDateFilter(getItemTimestamp(it, cust.lastTime)));
-                originalIndices = displayItems.map(it => uniqueCurrent.findIndex(ci => ci.id === it.id));
-            }
-
-            if (displayItems.length > 0) {
-                const total = displayItems.reduce((sum, it) => sum + (it.price || 0), 0);
-                allRows.push({ 
-                    user, 
-                    platform: p, 
-                    c: {
-                        ...cust,
-                        count: displayItems.length,
-                        total,
-                        items: displayItems
-                    },
-                    displayItems,
-                    originalIndices
-                });
-            }
-        });
-    });
-
     const effectiveListSearch = (listSearch || searchKeyword || '').trim().toLowerCase();
-    if (effectiveListSearch) {
-        const query = effectiveListSearch;
-        const isIdQuery = query.startsWith('#') || /^\d+$/.test(query);
-        const targetId = query.startsWith('#') ? query.slice(1) : query;
 
-        allRows = allRows.filter(r => {
-            const userTag = store[r.platform].tags[r.user];
-            if (query === '/coc' && userTag === 'COC') return true;
-            if (query === '/quen' && userTag === 'VIP') return true;
-            if (query === '/vip' && userTag === 'VIP') return true;
-            if (query === '/dao' && userTag === 'DAO') return true;
-            if (query === '/chan' && userTag === 'CHAN') return true;
-            if (query.startsWith('/')) return false;
-            
-            const nick = store[r.platform].nicknames?.[r.user] || '';
-            const shortId = getShortId(r.user).toLowerCase();
+    const allRows = useMemo(() => {
+        let rows: {user: string, platform: Platform, c: CustomerData, displayItems: OrderItem[], originalIndices: number[]}[] = [];
+        (['tiktok', 'facebook', 'shopee'] as Platform[]).forEach(p => {
+            if (filterPlatform && p !== filterPlatform) return;
+            const custs = store[p].customers;
+            Object.keys(custs).forEach(rawUser => {
+                const user = normalizeUser(rawUser);
+                const cust = custs[rawUser];
+                if (!cust) return;
 
-            // So khớp ID chính xác khi tìm kiếm mã ID (loại bỏ việc 1 ID tìm ra 3 người khác nhau)
-            if (isIdQuery) {
-                return shortId === targetId || ('#' + shortId) === query;
-            }
+                // 1. Loại bỏ đơn hàng / sản phẩm trùng lặp ID (đảm bảo mỗi ID chỉ hiển thị 1 lần duy nhất trong giỏ hàng)
+                const uniqueCurrent = deduplicateOrderItems(cust.items || []);
+                const uniquePast = deduplicateOrderItems(cust.pastItems || []);
 
-            return r.user.toLowerCase().includes(query) || nick.toLowerCase().includes(query);
+                let displayItems: OrderItem[] = [];
+                let originalIndices: number[] = [];
+
+                if (dateFilter === 'all') {
+                    displayItems = uniqueCurrent;
+                    originalIndices = uniqueCurrent.map((_, i) => i);
+                } else {
+                    // Khi lọc theo ngày: lọc các món trong phiên này và cả phiên cũ phù hợp với ngày được chọn
+                    const allItems = [...uniqueCurrent, ...uniquePast];
+                    displayItems = allItems.filter(it => isTimestampInDateFilter(getItemTimestamp(it, cust.lastTime)));
+                    originalIndices = displayItems.map(it => uniqueCurrent.findIndex(ci => ci.id === it.id));
+                }
+
+                if (displayItems.length > 0) {
+                    const totalQty = displayItems.reduce((sum, it) => sum + (it.quantity || 1), 0);
+                    const total = displayItems.reduce((sum, it) => sum + (it.price || 0), 0);
+                    rows.push({ 
+                        user, 
+                        platform: p, 
+                        c: {
+                            ...cust,
+                            count: totalQty,
+                            total,
+                            items: displayItems
+                        },
+                        displayItems,
+                        originalIndices
+                    });
+                }
+            });
         });
-    }
 
-    if (sortBy === 'newest') {
-        allRows.sort((a,b) => b.c.lastTime - a.c.lastTime);
-    } else if (sortBy === 'count') {
-        allRows.sort((a,b) => {
-            if (b.c.count !== a.c.count) return b.c.count - a.c.count;
-            return b.c.lastTime - a.c.lastTime;
-        });
-    } else {
-        allRows.sort((a,b) => {
-            if (b.c.total !== a.c.total) return b.c.total - a.c.total;
-            return b.c.lastTime - a.c.lastTime;
-        });
-    }
+        if (effectiveListSearch) {
+            const query = effectiveListSearch;
+            const isIdQuery = query.startsWith('#') || /^\d+$/.test(query);
+            const targetId = query.startsWith('#') ? query.slice(1) : query;
+
+            rows = rows.filter(r => {
+                const userTag = store[r.platform].tags[r.user];
+                if (query === '/coc' && userTag === 'COC') return true;
+                if (query === '/quen' && userTag === 'VIP') return true;
+                if (query === '/vip' && userTag === 'VIP') return true;
+                if (query === '/dao' && userTag === 'DAO') return true;
+                if (query === '/chan' && userTag === 'CHAN') return true;
+                if (query.startsWith('/')) return false;
+                
+                const nick = store[r.platform].nicknames?.[r.user] || '';
+                const shortId = getShortId(r.user).toLowerCase();
+
+                // So khớp ID chính xác khi tìm kiếm mã ID (loại bỏ việc 1 ID tìm ra 3 người khác nhau)
+                if (isIdQuery) {
+                    return shortId === targetId || ('#' + shortId) === query;
+                }
+
+                return r.user.toLowerCase().includes(query) || nick.toLowerCase().includes(query);
+            });
+        }
+
+        if (sortBy === 'newest') {
+            rows.sort((a,b) => b.c.lastTime - a.c.lastTime);
+        } else if (sortBy === 'count') {
+            rows.sort((a,b) => {
+                if (b.c.count !== a.c.count) return b.c.count - a.c.count;
+                return b.c.lastTime - a.c.lastTime;
+            });
+        } else {
+            rows.sort((a,b) => {
+                if (b.c.total !== a.c.total) return b.c.total - a.c.total;
+                return b.c.lastTime - a.c.lastTime;
+            });
+        }
+        return rows;
+    }, [filterPlatform, store.tiktok.customers, store.facebook.customers, store.shopee.customers, store.tiktok.tags, store.facebook.tags, store.shopee.tags, store.tiktok.nicknames, store.facebook.nicknames, store.shopee.nicknames, dateFilter, customDate, effectiveListSearch, sortBy]);
 
     return (
         <div className={isPage ? "h-full w-full flex flex-col bg-[#0e1621]" : "fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-2 sm:p-4"}>
@@ -711,148 +869,146 @@ export function ListModal({ filterPlatform, onClose, onOpenProfile, onOpenPrice,
                     <button onClick={onClose} className="bg-white/10 rounded-full w-8 h-8 flex items-center justify-center font-bold text-gray-400 hover:bg-white/20">✕</button>
                 </div>}
                 
-                {/* Platform Filter Bar & Sort Controls */}
-                <div className="p-3 bg-[#1c242f] border-b border-white/10 shrink-0 space-y-2.5">
-                    <div className="flex gap-1.5 overflow-x-auto pb-0.5 hide-scrollbar">
-                        <button
-                            onClick={() => onSetFilter?.(undefined)}
-                            className={`px-3 py-1.5 text-xs font-bold rounded-lg whitespace-nowrap transition-all cursor-pointer ${
-                                !filterPlatform 
-                                    ? 'bg-blue-600 text-white shadow-sm' 
-                                    : 'bg-[#0e1621] border border-white/10 text-gray-400 hover:bg-white/5'
-                            }`}
-                        >
-                            🌐 Tất cả ({allRows.length})
-                        </button>
-                        {(['tiktok', 'facebook', 'shopee'] as Platform[]).map(p => {
-                            const count = Object.values(store[p].customers).filter((c: any) => c.count > 0).length;
-                            return (
-                                <button
-                                    key={p}
-                                    onClick={() => onSetFilter?.(filterPlatform === p ? undefined : p)}
-                                    className={`px-3 py-1.5 text-xs font-bold rounded-lg whitespace-nowrap transition-all cursor-pointer ${
-                                        filterPlatform === p 
-                                            ? `${PLATFORMS[p].bgClass} text-white shadow-sm ring-2 ring-white/20` 
-                                            : 'bg-[#0e1621] border border-white/10 text-gray-400 hover:bg-white/5'
-                                    }`}
-                                >
-                                    {PLATFORMS[p].label} ({count})
-                                </button>
-                            );
-                        })}
-                    </div>
+                {/* 1-Row Compact Filter Bar */}
+                <div className="px-3 py-2 bg-[#1c242f] border-b border-white/10 shrink-0 flex items-center justify-between gap-1.5 z-20">
+                    <div className="flex items-center gap-1.5 overflow-x-auto hide-scrollbar flex-1 py-0.5">
+                        {/* 1. Platform Dropdown */}
+                        <div className="relative shrink-0">
+                            <div className={`px-2.5 py-1.5 text-xs font-bold rounded-lg whitespace-nowrap flex items-center gap-1.5 border shadow-xs pointer-events-none ${
+                                filterPlatform 
+                                    ? `${PLATFORMS[filterPlatform].bgClass} text-white border-white/20 ring-1 ring-white/20` 
+                                    : 'bg-blue-600 border-blue-500 text-white'
+                            }`}>
+                                <span>{filterPlatform ? PLATFORMS[filterPlatform].label : '🌐 Tất cả'}</span>
+                                <span className="text-[10px] opacity-80 font-mono font-normal">
+                                    ({filterPlatform 
+                                        ? Object.values(store[filterPlatform].customers).filter((c: any) => c.count > 0).length 
+                                        : allRows.length})
+                                </span>
+                                <ChevronDown size={12} className="opacity-80" />
+                            </div>
+                            <select
+                                value={filterPlatform || 'all'}
+                                onChange={(e) => onSetFilter?.(e.target.value === 'all' ? undefined : e.target.value as Platform)}
+                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10 text-base"
+                            >
+                                <option value="all" className="bg-[#1c242f] text-white">🌐 Tất cả sàn ({allRows.length})</option>
+                                {(['tiktok', 'facebook', 'shopee'] as Platform[]).map(p => {
+                                    const count = Object.values(store[p].customers).filter((c: any) => c.count > 0).length;
+                                    return (
+                                        <option key={p} value={p} className="bg-[#1c242f] text-white">
+                                            {PLATFORMS[p].label} ({count})
+                                        </option>
+                                    );
+                                })}
+                            </select>
+                        </div>
 
-                    {/* Date Filter Bar */}
-                    <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 hide-scrollbar text-xs">
-                        <span className="text-gray-400 font-bold text-[11px] shrink-0 flex items-center gap-1">
-                            <Calendar size={13} className="text-blue-400" /> Ngày:
-                        </span>
-                        <button
-                            onClick={() => { setDateFilter('all'); setCustomDate(''); }}
-                            className={`px-2.5 py-1 rounded-md text-[11px] font-bold whitespace-nowrap transition-colors cursor-pointer ${
-                                dateFilter === 'all' ? 'bg-blue-600 text-white shadow-sm' : 'bg-[#0e1621] text-gray-400 border border-white/10 hover:text-white'
-                            }`}
-                        >
-                            Tất cả
-                        </button>
-                        <button
-                            onClick={() => { setDateFilter('today'); setCustomDate(''); }}
-                            className={`px-2.5 py-1 rounded-md text-[11px] font-bold whitespace-nowrap transition-colors cursor-pointer ${
-                                dateFilter === 'today' ? 'bg-emerald-600 text-white shadow-sm' : 'bg-[#0e1621] text-gray-400 border border-white/10 hover:text-white'
-                            }`}
-                        >
-                            🟢 Hôm nay
-                        </button>
-                        <button
-                            onClick={() => { setDateFilter('yesterday'); setCustomDate(''); }}
-                            className={`px-2.5 py-1 rounded-md text-[11px] font-bold whitespace-nowrap transition-colors cursor-pointer ${
-                                dateFilter === 'yesterday' ? 'bg-amber-600 text-white shadow-sm' : 'bg-[#0e1621] text-gray-400 border border-white/10 hover:text-white'
-                            }`}
-                        >
-                            🟡 Hôm qua
-                        </button>
-                        <button
-                            onClick={() => { setDateFilter('7days'); setCustomDate(''); }}
-                            className={`px-2.5 py-1 rounded-md text-[11px] font-bold whitespace-nowrap transition-colors cursor-pointer ${
-                                dateFilter === '7days' ? 'bg-purple-600 text-white shadow-sm' : 'bg-[#0e1621] text-gray-400 border border-white/10 hover:text-white'
-                            }`}
-                        >
-                            🕒 7 ngày qua
-                        </button>
-                        <div className="flex items-center gap-1 shrink-0">
-                            <input 
-                                type="date" 
-                                value={customDate} 
+                        {/* 2. Date Filter Dropdown */}
+                        <div className="relative shrink-0 flex items-center gap-1">
+                            <div className={`px-2.5 py-1.5 text-xs font-bold rounded-lg whitespace-nowrap flex items-center gap-1.5 border shadow-xs pointer-events-none ${
+                                dateFilter !== 'all' 
+                                    ? 'bg-purple-600 border-purple-500 text-white' 
+                                    : 'bg-[#0e1621] border-white/10 text-gray-300'
+                            }`}>
+                                <Calendar size={12} className={dateFilter !== 'all' ? 'text-white' : 'text-blue-400'} />
+                                <span>
+                                    {dateFilter === 'all' ? 'Ngày: Tất cả' :
+                                     dateFilter === 'today' ? '🟢 Hôm nay' :
+                                     dateFilter === 'yesterday' ? '🟡 Hôm qua' :
+                                     dateFilter === '7days' ? '🕒 7 ngày' :
+                                     `🗓️ ${customDate || 'Ngày'}`}
+                                </span>
+                                <ChevronDown size={12} className="opacity-80" />
+                            </div>
+                            <select
+                                value={dateFilter}
                                 onChange={(e) => {
-                                    setCustomDate(e.target.value);
-                                    if (e.target.value) setDateFilter('custom');
-                                    else setDateFilter('all');
+                                    const val = e.target.value as any;
+                                    setDateFilter(val);
+                                    if (val !== 'custom') setCustomDate('');
                                 }}
-                                className={`px-2 py-0.5 rounded-md text-[11px] bg-[#0e1621] border transition-colors text-gray-200 cursor-pointer ${
-                                    dateFilter === 'custom' ? 'border-blue-500 ring-1 ring-blue-500 text-white' : 'border-white/10'
-                                }`}
-                                title="Chọn ngày cụ thể để xem giỏ hàng"
-                            />
+                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10 text-base"
+                            >
+                                <option value="all" className="bg-[#1c242f] text-white">📅 Tất cả các ngày</option>
+                                <option value="today" className="bg-[#1c242f] text-white">🟢 Hôm nay</option>
+                                <option value="yesterday" className="bg-[#1c242f] text-white">🟡 Hôm qua</option>
+                                <option value="7days" className="bg-[#1c242f] text-white">🕒 7 ngày qua</option>
+                                <option value="custom" className="bg-[#1c242f] text-white">🗓️ Chọn ngày cụ thể...</option>
+                            </select>
                             {dateFilter === 'custom' && (
-                                <button 
-                                    onClick={() => { setCustomDate(''); setDateFilter('all'); }}
-                                    className="text-gray-400 hover:text-white text-xs px-1"
-                                    title="Xóa lọc ngày"
-                                >
-                                    ✕
-                                </button>
+                                <div className="flex items-center gap-1">
+                                    <input
+                                        type="date"
+                                        value={customDate}
+                                        onChange={(e) => setCustomDate(e.target.value)}
+                                        className="px-2 py-1 rounded-md text-[11px] bg-[#0e1621] border border-blue-500 ring-1 ring-blue-500 text-white cursor-pointer"
+                                    />
+                                    {customDate && (
+                                        <button
+                                            type="button"
+                                            onClick={() => { setCustomDate(''); setDateFilter('all'); }}
+                                            className="text-gray-400 hover:text-white text-xs px-1"
+                                            title="Xóa lọc ngày"
+                                        >
+                                            ✕
+                                        </button>
+                                    )}
+                                </div>
                             )}
                         </div>
+
+                        {/* 3. Sort Dropdown */}
+                        <div className="relative shrink-0">
+                            <div className={`px-2.5 py-1.5 text-xs font-bold rounded-lg whitespace-nowrap flex items-center gap-1.5 border shadow-xs pointer-events-none ${
+                                sortBy !== 'newest' 
+                                    ? 'bg-indigo-600 border-indigo-500 text-white' 
+                                    : 'bg-[#0e1621] border-white/10 text-gray-300'
+                            }`}>
+                                <span>
+                                    {sortBy === 'newest' ? '🕒 Mới nhất' :
+                                     sortBy === 'count' ? '📦 Số lượng' : '💰 Doanh thu'}
+                                </span>
+                                <ChevronDown size={12} className="opacity-80" />
+                            </div>
+                            <select
+                                value={sortBy}
+                                onChange={(e) => setSortBy(e.target.value as any)}
+                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10 text-base"
+                            >
+                                <option value="newest" className="bg-[#1c242f] text-white">🕒 Mới nhất</option>
+                                <option value="count" className="bg-[#1c242f] text-white">📦 Số lượng nhiều</option>
+                                <option value="revenue" className="bg-[#1c242f] text-white">💰 Doanh thu cao</option>
+                            </select>
+                        </div>
                     </div>
 
-                    <div className="flex items-center justify-between gap-2 flex-wrap sm:flex-nowrap">
-                        <div className="flex gap-1.5 flex-1">
-                            <button 
-                                onClick={() => setSortBy('newest')}
-                                className={`flex-1 py-1.5 rounded-lg text-[11px] font-bold border transition-colors ${sortBy === 'newest' ? 'bg-blue-600 border-blue-500 text-white shadow-sm' : 'bg-[#0e1621] border-white/10 text-gray-400'}`}
-                            >
-                                🕒 Mới nhất
-                            </button>
-                            <button 
-                                onClick={() => setSortBy('count')}
-                                className={`flex-1 py-1.5 rounded-lg text-[11px] font-bold border transition-colors ${sortBy === 'count' ? 'bg-blue-600 border-blue-500 text-white shadow-sm' : 'bg-[#0e1621] border-white/10 text-gray-400'}`}
-                            >
-                                📦 Số lượng
-                            </button>
-                            <button 
-                                onClick={() => setSortBy('revenue')}
-                                className={`flex-1 py-1.5 rounded-lg text-[11px] font-bold border transition-colors ${sortBy === 'revenue' ? 'bg-blue-600 border-blue-500 text-white shadow-sm' : 'bg-[#0e1621] border-white/10 text-gray-400'}`}
-                            >
-                                💰 Doanh thu
-                            </button>
-                        </div>
-                        {/* Toggle Chế độ xem: Danh sách vs Dạng ô vuông */}
-                        <div className="flex items-center bg-[#0e1621] p-1 rounded-xl border border-white/10 shrink-0 shadow-inner">
-                            <button
-                                type="button"
-                                onClick={() => handleSetViewMode('list')}
-                                className={`p-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center cursor-pointer ${
-                                    viewMode === 'list'
-                                        ? 'bg-blue-600 text-white shadow-md'
-                                        : 'text-gray-400 hover:text-white'
-                                }`}
-                                title="Xem dạng danh sách"
-                            >
-                                <List size={16} />
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => handleSetViewMode('grid')}
-                                className={`p-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center cursor-pointer ${
-                                    viewMode === 'grid'
-                                        ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md ring-1 ring-white/20'
-                                        : 'text-gray-400 hover:text-white'
-                                }`}
-                                title="Xem dạng ô vuông (Grid)"
-                            >
-                                <LayoutGrid size={16} />
-                            </button>
-                        </div>
+                    {/* View Mode Toggle: List vs Grid */}
+                    <div className="flex items-center bg-[#0e1621] p-0.5 rounded-lg border border-white/10 shrink-0 shadow-inner ml-1">
+                        <button
+                            type="button"
+                            onClick={() => handleSetViewMode('list')}
+                            className={`p-1.5 rounded-md text-xs font-bold transition-all flex items-center justify-center cursor-pointer ${
+                                viewMode === 'list'
+                                    ? 'bg-blue-600 text-white shadow-md'
+                                    : 'text-gray-400 hover:text-white'
+                            }`}
+                            title="Xem dạng danh sách"
+                        >
+                            <List size={15} />
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => handleSetViewMode('grid')}
+                            className={`p-1.5 rounded-md text-xs font-bold transition-all flex items-center justify-center cursor-pointer ${
+                                viewMode === 'grid'
+                                    ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md ring-1 ring-white/20'
+                                    : 'text-gray-400 hover:text-white'
+                            }`}
+                            title="Xem dạng ô vuông (Grid)"
+                        >
+                            <LayoutGrid size={15} />
+                        </button>
                     </div>
                 </div>
                 
@@ -867,8 +1023,7 @@ export function ListModal({ filterPlatform, onClose, onOpenProfile, onOpenPrice,
                         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2.5 sm:gap-3 p-1">
                             {allRows.map((row, idx) => {
                                 const tag = store[row.platform].tags[row.user] || 'NORMAL';
-                                const commentWithAvatar = store[row.platform].comments.find(c => c.user === row.user && c.avatar);
-                                const avatarUrl = commentWithAvatar?.avatar;
+                                const avatarUrl = getCustomerAvatar(row.user, row.platform) || undefined;
                                 const pLink = store[row.platform].pancakeLinks?.[row.user];
                                 const detectedPhone = row.c.items?.map(it => it.content).find(content => {
                                     if (!content) return false;
@@ -1014,8 +1169,7 @@ export function ListModal({ filterPlatform, onClose, onOpenProfile, onOpenPrice,
                                     <div className="flex-1 flex items-center gap-3 min-w-0 pr-2">
                                         {(() => {
                                             const tag = store[row.platform].tags[row.user] || 'NORMAL';
-                                            const commentWithAvatar = store[row.platform].comments.find(c => c.user === row.user && c.avatar);
-                                            const avatarUrl = commentWithAvatar?.avatar;
+                                            const avatarUrl = getCustomerAvatar(row.user, row.platform) || undefined;
                                             return (
                                                 <>
                                                     <CustomerAvatar 
@@ -1137,37 +1291,54 @@ export function ListModal({ filterPlatform, onClose, onOpenProfile, onOpenPrice,
                                         [...row.displayItems].reverse().map((item, reversedIdx) => {
                                             const itemIdx = row.displayItems.length - 1 - reversedIdx;
                                             const originalIdx = row.originalIndices ? row.originalIndices[itemIdx] : itemIdx;
-                                            const itemUnitPrice = item.unitPrice || item.price;
+                                            const itemUnitPrice = item.unitPrice || (item.quantity && item.price ? Math.round(item.price / item.quantity) : item.price);
                                             const itemQty = item.quantity || 1;
                                             const itemTotalK = item.price || (itemUnitPrice * itemQty);
 
+                                            const sourceComment = item.sourceCommentId ? store[row.platform].comments?.find(c => c.id === item.sourceCommentId) : null;
+                                            const sourceCommentStr = sourceComment ? (typeof sourceComment.content === 'object' ? JSON.stringify(sourceComment.content) : String(sourceComment.content || '')) : '';
+                                            const rawContent = item.content && !item.content.includes('(Không ghi chú)') ? item.content.trim() : '';
+                                            const fullCommentContent = sourceCommentStr || rawContent || `Sản phẩm #${itemIdx + 1}`;
+
                                             return (
-                                            <div key={item.id || `disp-${itemIdx}`} className="flex justify-between items-center py-2 px-2.5 rounded-xl bg-[#121c28] border border-white/10 gap-2 mb-1">
-                                                <div className="flex-1 min-w-0 flex items-center gap-2">
-                                                    <span className="font-mono text-xs text-gray-400 font-bold bg-black/40 px-1.5 py-0.5 rounded">#{itemIdx + 1}</span>
-                                                    <span className="text-gray-100 font-bold text-xs sm:text-sm truncate">
-                                                        {(!item.content || item.content === "(Không ghi chú)" || item.content.includes("Không ghi chú")) ? `Sản phẩm #${itemIdx + 1}` : item.content}
+                                            <div key={item.id || `disp-${itemIdx}`} className="flex justify-between items-center py-1.5 px-2.5 rounded-xl bg-[#121c28] border border-white/10 gap-2 mb-1">
+                                                {/* Bấm vào nội dung cmt để mở popup sửa Giá × SL */}
+                                                <div 
+                                                    onClick={() => originalIdx >= 0 && setEditingPriceQty({
+                                                        platform: row.platform,
+                                                        user: row.user,
+                                                        itemIndex: originalIdx,
+                                                        content: fullCommentContent,
+                                                        unitPrice: itemUnitPrice,
+                                                        quantity: itemQty,
+                                                        isPast: false
+                                                    })}
+                                                    className="flex-1 min-w-0 flex items-center gap-1.5 cursor-pointer group hover:bg-white/5 py-1 px-1.5 -my-1 -ml-1 rounded-lg transition-colors select-none"
+                                                    title="Bấm vào cmt để chỉnh sửa Giá × Số lượng"
+                                                >
+                                                    <span className="font-mono text-xs text-gray-400 font-bold bg-black/40 px-1.5 py-0.5 rounded shrink-0">#{itemIdx + 1}</span>
+                                                    <span className="text-gray-100 font-bold text-xs sm:text-sm truncate group-hover:text-cyan-300 transition-colors">
+                                                        {fullCommentContent}
                                                     </span>
+                                                    {/* Khi có số lượng từ 2 trở lên thì (giá x sl) đằng sau cmt */}
+                                                    {itemQty >= 2 && (
+                                                        <span className="text-cyan-300 font-mono font-bold text-xs shrink-0 bg-cyan-950/60 px-1.5 py-0.2 rounded border border-cyan-500/30">
+                                                            ({itemUnitPrice}k × {itemQty})
+                                                        </span>
+                                                    )}
                                                 </div>
 
-                                                {/* Formula Badge (Giá x SL) */}
+                                                {/* Phía sau: Tổng tiền + Nút In + Nút Xóa (Gọn gàng 1 dòng không bao giờ xuống dòng) */}
                                                 <div className="flex items-center gap-2 shrink-0">
-                                                    <div className="bg-[#0b131e] border border-cyan-500/30 px-2 py-0.5 rounded-lg flex items-center gap-1 font-mono text-xs">
-                                                        <span className="text-cyan-300 font-bold">{itemUnitPrice}k</span>
-                                                        <span className="text-gray-400 text-[10px]">×</span>
-                                                        <span className="text-emerald-400 font-black">{itemQty}</span>
-                                                    </div>
-                                                    <span className="text-emerald-400 font-mono font-black text-sm min-w-[45px] text-right">{itemTotalK}k</span>
-                                                </div>
-
-                                                <div className="flex items-center gap-1.5 shrink-0 pl-1 border-l border-white/10">
+                                                    <span className="text-emerald-400 font-mono font-black text-sm min-w-[42px] text-right">{itemTotalK}k</span>
                                                     <button 
                                                         onClick={() => {
                                                             let time = new Date().toLocaleTimeString('vi-VN', {hour:'2-digit',minute:'2-digit'});
-                                                            const cleanPrintContent = (!item.content || item.content === "(Không ghi chú)" || item.content.includes("Không ghi chú")) ? `(${itemUnitPrice}k x ${itemQty})` : `${item.content} (${itemUnitPrice}k x ${itemQty})`;
+                                                            const cleanPrintContent = `${fullCommentContent} (${itemUnitPrice}k x ${itemQty})`;
                                                             printLabel(store[row.platform].nicknames?.[row.user] ? `${row.user} (${store[row.platform].nicknames[row.user]})` : `#${getShortId(row.user)} ${row.user}`, cleanPrintContent, itemTotalK, time, PLATFORMS[row.platform].label);
                                                         }}
                                                         className="bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white rounded-lg px-2.5 py-1 font-bold text-xs whitespace-nowrap flex items-center gap-1 shadow-sm transition-all cursor-pointer"
+                                                        title="In tem món này"
                                                     >
                                                         🖨️ IN
                                                     </button>
@@ -1179,7 +1350,8 @@ export function ListModal({ filterPlatform, onClose, onOpenProfile, onOpenPrice,
                                                     )}
                                                 </div>
                                             </div>
-                                        )})
+                                            );
+                                        })
                                     )}
                                 </div>
                             </div>
@@ -1188,6 +1360,12 @@ export function ListModal({ filterPlatform, onClose, onOpenProfile, onOpenPrice,
                     )}
                 </div>
             </div>
+            {editingPriceQty && (
+                <QuickPriceQtyModal 
+                    target={editingPriceQty} 
+                    onClose={() => setEditingPriceQty(null)} 
+                />
+            )}
         </div>
     );
 }
@@ -1272,9 +1450,10 @@ export function LiveEfficiencyModal({
             
             // Reconcile current items if custData.count or custData.total exceeds currentItems array
             const currentSumPrice = currentItems.reduce((s, it) => s + (it.price || 0), 0);
+            const currentTotalQty = currentItems.reduce((s, it) => s + (it.quantity || 1), 0);
             let effectiveCurrentItems = [...currentItems];
-            if (custData.count > currentItems.length || custData.total > currentSumPrice) {
-                const diffCount = Math.max(0, custData.count - currentItems.length);
+            if (custData.count > currentTotalQty || custData.total > currentSumPrice) {
+                const diffCount = Math.max(0, custData.count - currentTotalQty);
                 const diffPrice = Math.max(0, custData.total - currentSumPrice);
                 const avgPrice = diffCount > 0 ? Math.round(diffPrice / diffCount) : diffPrice;
                 for (let i = 0; i < (diffCount || 1); i++) {
@@ -1324,15 +1503,16 @@ export function LiveEfficiencyModal({
                 }
 
                 if (include) {
-                    userOrderCount++;
+                    const itemQty = item.quantity || 1;
+                    userOrderCount += itemQty;
                     userRevenue += (item.price || 0);
 
                     const hour = new Date(itemTime).getHours();
-                    hourCounts[hour] = (hourCounts[hour] || 0) + 1;
+                    hourCounts[hour] = (hourCounts[hour] || 0) + itemQty;
 
                     const priceStr = (item.price || 0).toString();
                     if (!priceCounts[priceStr]) priceCounts[priceStr] = { count: 0, revenue: 0 };
-                    priceCounts[priceStr].count++;
+                    priceCounts[priceStr].count += itemQty;
                     priceCounts[priceStr].revenue += (item.price || 0);
                 }
             });
@@ -1795,6 +1975,7 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
     const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
     const [isPushModalOpen, setIsPushModalOpen] = useState(false);
     const [isCalculatorOpen, setIsCalculatorOpen] = useState(false);
+    const [editingPriceQty, setEditingPriceQty] = useState<EditingPriceQtyTarget | null>(null);
 
     const totalSelectedCount = selectedCurrent.size + selectedPast.size;
     const totalSelectedPriceK = 
@@ -1848,8 +2029,7 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
     const tag = store[platform].tags[cleanUser] || 'NORMAL';
     
     // Find avatar if available
-    const commentWithAvatar = store[platform].comments.find(c => normalizeUser(c.user) === cleanUser && c.avatar);
-    const avatarUrl = commentWithAvatar?.avatar;
+    const avatarUrl = getCustomerAvatar(cleanUser, platform) || undefined;
 
     return (
         <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-2 sm:p-4">
@@ -1910,30 +2090,52 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
                             </div>
 
                             {/* Stats */}
-                            {/* Stats */}
                             {(() => {
                                 const activeInsight = (insight || getCustomerInsight(cleanUser));
                                 const sStat = checkCustomerPancakeShippedStatus(cust, activeInsight);
                                 const currentItems = cust?.items || [];
-                                const unshippedCurrentItems = currentItems.filter(it => !it.shipped);
-                                const dispCount = sStat.isAllShipped ? 0 : unshippedCurrentItems.length;
-                                const dispTotal = sStat.isAllShipped ? 0 : unshippedCurrentItems.reduce((sum, it) => sum + (it.price || 0), 0);
+                                const pastItems = cust?.pastItems || [];
+
+                                // 1. Đang chốt (nghĩa là đơn đang chốt hôm nay)
+                                const activeItems = sStat.isAllShipped ? [] : currentItems.filter(it => !it.shipped);
+                                const dangChotQty = activeItems.reduce((sum, it) => sum + (it.quantity || 1), 0);
+                                const dangChotTotal = activeItems.reduce((sum, it) => sum + (it.price || 0), 0);
+
+                                // 2. Đang giữ đơn (nghĩa là đơn đang chốt các phiên trước)
+                                const holdingItems = sStat.isAllShipped ? [] : pastItems.filter(it => !it.shipped);
+                                const dangGiuQty = holdingItems.reduce((sum, it) => sum + (it.quantity || 1), 0);
+                                const dangGiuTotal = holdingItems.reduce((sum, it) => sum + (it.price || 0), 0);
+
+                                // 3. Đã chốt = TỔNG của "Đang chốt" và "Đang giữ" cộng lại cả số lượng và thành tiền
+                                const daChotQty = sStat.isAllShipped ? 0 : (dangChotQty + dangGiuQty);
+                                const daChotTotal = sStat.isAllShipped ? 0 : (dangChotTotal + dangGiuTotal);
+
                                 return (
-                                    <div className="grid grid-cols-2 gap-2">
-                                        <div className="bg-blue-50 border border-blue-100 py-1 px-1.5 rounded-md flex items-center justify-between shadow-sm">
-                                            <span className="text-[9px] font-bold text-blue-600">ĐÃ CHỐT:</span>
-                                            <span className="text-[11px] font-black text-blue-800 leading-none">
-                                                {dispCount}
-                                                {sStat.isAllShipped && <span className="text-[9px] text-emerald-600 font-bold ml-1">✓ Đã đi</span>}
-                                            </span>
+                                    <div className="space-y-1">
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <div className="bg-blue-950/70 border border-blue-500/40 py-1 px-1.5 rounded-lg flex items-center justify-between shadow-xs">
+                                                <span className="text-[9px] font-bold text-blue-300">ĐÃ CHỐT:</span>
+                                                <span className="text-[11px] font-black text-blue-200 font-mono leading-none">
+                                                    {daChotQty} cái
+                                                    {sStat.isAllShipped && <span className="text-[9px] text-emerald-400 font-bold ml-1">✓ Đã đi</span>}
+                                                </span>
+                                            </div>
+                                            <div className="bg-emerald-950/70 border border-emerald-500/40 py-1 px-1.5 rounded-lg flex items-center justify-between shadow-xs">
+                                                <span className="text-[9px] font-bold text-emerald-300">TỔNG TIỀN:</span>
+                                                <span className="text-[11px] font-black text-emerald-300 font-mono leading-none">
+                                                    {daChotTotal}k
+                                                    {sStat.isAllShipped && <span className="text-[9px] text-emerald-400 font-bold ml-1">(0k nợ)</span>}
+                                                </span>
+                                            </div>
                                         </div>
-                                        <div className="bg-red-50 border border-red-100 py-1 px-1.5 rounded-md flex items-center justify-between shadow-sm">
-                                            <span className="text-[9px] font-bold text-red-600">TỔNG:</span>
-                                            <span className="text-[11px] font-black text-red-800 leading-none">
-                                                {dispTotal}k
-                                                {sStat.isAllShipped && <span className="text-[9px] text-emerald-600 font-bold ml-1">0k nợ</span>}
-                                            </span>
-                                        </div>
+                                        {(dangChotQty > 0 || dangGiuQty > 0) && !sStat.isAllShipped && (
+                                            <div className="text-[10px] text-gray-400 flex items-center justify-between px-0.5">
+                                                <span>🛍️ Đang chốt: <strong className="text-cyan-300 font-mono">{dangChotQty} cái ({dangChotTotal}k)</strong></span>
+                                                {dangGiuQty > 0 && (
+                                                    <span>⏳ Đang giữ: <strong className="text-amber-300 font-mono">{dangGiuQty} cái ({dangGiuTotal}k)</strong></span>
+                                                )}
+                                            </div>
+                                        )}
                                     </div>
                                 );
                             })()}
@@ -2078,7 +2280,7 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
                                                     }}
                                                     className="bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs px-3.5 py-2 rounded-xl shadow-md cursor-pointer transition-all flex items-center gap-1.5 active:scale-95 whitespace-nowrap w-full sm:w-auto justify-center"
                                                 >
-                                                    <span>✅ Xác nhận {cust.items.length} món này ĐÃ ĐI ĐƠN</span>
+                                                    <span>✅ Xác nhận {cust.items.reduce((sum, it) => sum + (it.quantity || 1), 0)} món này ĐÃ ĐI ĐƠN</span>
                                                 </button>
                                             </div>
                                         </div>
@@ -2088,7 +2290,7 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
                                                 <span className="text-xl shrink-0 mt-0.5">🛍️</span>
                                                 <div>
                                                     <div className="text-xs font-black text-amber-300 uppercase tracking-wide flex items-center gap-1.5 flex-wrap">
-                                                        <span>CÓ {shippedStatus.unshippedCurrentItemsCount || cust.items.length} MÓN CHƯA ĐI ĐƠN</span>
+                                                        <span>CÓ {shippedStatus.unshippedCurrentItemsCount || cust.items.reduce((sum, it) => sum + (it.quantity || 1), 0)} MÓN CHƯA ĐI ĐƠN</span>
                                                     </div>
                                                     <div className="text-[11px] text-amber-100/90 mt-1 leading-relaxed">
                                                         Bấm nút <strong>"Đẩy đơn Pancake"</strong> bên dưới để tạo đơn mới, hoặc đánh dấu <strong>"Đã đi đơn"</strong> nếu đã gửi.
@@ -2450,9 +2652,10 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
                         const sStat = checkCustomerPancakeShippedStatus(cust, activeInsight);
                         const currentItems = cust?.items || [];
                         const hasCurrentItems = currentItems.length > 0;
-                        const unshippedCount = currentItems.filter(it => !it.shipped).length;
-                        const shippedCount = currentItems.filter(it => it.shipped).length;
-                        const allCurrentShipped = hasCurrentItems && shippedCount === currentItems.length;
+                        const unshippedCount = currentItems.filter(it => !it.shipped).reduce((sum, it) => sum + (it.quantity || 1), 0);
+                        const shippedCount = currentItems.filter(it => it.shipped).reduce((sum, it) => sum + (it.quantity || 1), 0);
+                        const totalCurrentQty = currentItems.reduce((sum, it) => sum + (it.quantity || 1), 0);
+                        const allCurrentShipped = hasCurrentItems && currentItems.every(it => it.shipped);
 
                         return (
                             <div className="mb-6">
@@ -2492,10 +2695,10 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
                                     <div className="flex items-center gap-2 flex-wrap">
                                         <span className="text-base font-black text-white flex items-center gap-1.5">
                                             <span>🛒</span>
-                                            <span>Đơn chốt phiên này</span>
+                                            <span>Đang chốt (hôm nay)</span>
                                             {currentItems.length > 0 && (
                                                 <span className="text-xs text-orange-400 font-mono font-bold bg-orange-950/60 px-2 py-0.5 rounded-full border border-orange-500/30">
-                                                    {currentItems.length} món
+                                                    {currentItems.reduce((sum, it) => sum + (it.quantity || 1), 0)} món
                                                 </span>
                                             )}
                                         </span>
@@ -2513,12 +2716,12 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
                                                         }
                                                     }}
                                                 />
-                                                Chọn tất cả ({currentItems.length})
+                                                Chọn tất cả ({currentItems.reduce((sum, it) => sum + (it.quantity || 1), 0)})
                                             </label>
                                         )}
                                         {shippedCount > 0 && (
                                             <span className="text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full">
-                                                Đã gửi: {shippedCount}/{currentItems.length}
+                                                Đã gửi: {currentItems.filter(it => it.shipped).reduce((sum, it) => sum + (it.quantity || 1), 0)}/{currentItems.reduce((sum, it) => sum + (it.quantity || 1), 0)}
                                             </span>
                                         )}
                                     </div>
@@ -2573,7 +2776,7 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
                                             <button
                                                 type="button"
                                                 onClick={() => store.archiveShippedCurrentItems(platform, cleanUser)}
-                                                title="Chuyển các món đã gửi vào danh sách Lịch sử chốt đơn cũ"
+                                                title="Chuyển các món đã gửi vào danh sách Đang giữ đơn / lịch sử cũ"
                                                 className="text-[11px] font-bold text-cyan-300 hover:text-white bg-cyan-950/40 hover:bg-cyan-900/50 px-2.5 py-1.5 rounded-xl border border-cyan-500/30 flex items-center gap-1 cursor-pointer transition-colors"
                                             >
                                                 <span>📦 Dọn vào LS ({shippedCount})</span>
@@ -2597,7 +2800,7 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
                                 <div className="mb-4">
                                     {!hasCurrentItems ? (
                                         <div className="text-center text-gray-400 py-6 bg-[#0e1621] rounded-2xl border border-dashed border-white/10 text-xs space-y-2">
-                                            <div>Phiên này chưa chốt đơn nào cho khách.</div>
+                                            <div>Hôm nay chưa chốt món nào cho khách.</div>
                                             <button
                                                 type="button"
                                                 onClick={() => setIsCalculatorOpen(true)}
@@ -2607,116 +2810,129 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
                                             </button>
                                         </div>
                                     ) : (
-                                        <div className="bg-[#121b27] border border-white/10 rounded-2xl p-2.5 sm:p-3 shadow-md space-y-2">
+                                        <div className="bg-[#0b121c] rounded-2xl p-2 sm:p-2.5 shadow-md space-y-1">
                                             {allCurrentShipped && (
                                                 <div className="bg-emerald-950/40 border border-emerald-500/40 rounded-xl p-2.5 mb-2 flex items-center justify-between gap-2">
                                                     <div className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
                                                         <span>🎉</span>
-                                                        <span>Tất cả {currentItems.length} món phiên này đã được đánh dấu đi đơn!</span>
+                                                        <span>Tất cả {totalCurrentQty} món đang chốt hôm nay đã được đánh dấu đi đơn!</span>
                                                     </div>
                                                     <button
                                                         type="button"
                                                         onClick={() => store.archiveShippedCurrentItems(platform, cleanUser)}
                                                         className="text-[10px] font-bold text-emerald-200 hover:text-white bg-emerald-800/60 hover:bg-emerald-700 px-2.5 py-1 rounded-lg border border-emerald-400/40 cursor-pointer transition-all active:scale-95"
                                                     >
-                                                        📦 Dọn vào lịch sử cũ
+                                                        📦 Dọn vào các phiên trước
                                                     </button>
                                                 </div>
                                             )}
 
-                                            {/* KIỂU LIST ĐƠN HÀNG CHUẨN (HÌNH 3: DANH SÁCH CHI TIẾT TÊN MÓN, SL X ĐƠN GIÁ, THÀNH TIỀN & CARD TỔNG CỘNG) */}
-                                            <div className="bg-[#0e1724] border border-white/10 rounded-2xl p-3 sm:p-4 shadow-lg space-y-3">
+                                            {/* DANH SÁCH MÓN: BỎ VIỀN LỒNG NHAU, HIỂN THỊ RÕ NỘI DUNG KHÁCH CMT CHỐT */}
+                                            <div className="space-y-1.5">
                                                 {currentItems.map((item, idx) => ({ item, idx })).reverse().map(({ item, idx }) => {
-                                                    const itemUnitPrice = item.unitPrice || item.price;
+                                                    const itemUnitPrice = item.unitPrice || (item.quantity && item.price ? Math.round(item.price / item.quantity) : item.price);
                                                     const itemQty = item.quantity || 1;
                                                     const itemTotalK = item.price || (itemUnitPrice * itemQty);
-                                                    const itemUnitPriceVnd = itemUnitPrice * 1000;
-                                                    const itemTotalVnd = itemTotalK * 1000;
 
-                                                    const displayName = (!item.content || item.content === "(Không ghi chú)" || item.content.includes("Không ghi chú")) 
-                                                        ? `Sản phẩm ${itemUnitPrice}k` 
-                                                        : item.content;
+                                                    const sourceComment = item.sourceCommentId ? store[platform].comments?.find(c => c.id === item.sourceCommentId) : null;
+                                                    const sourceCommentStr = sourceComment ? (typeof sourceComment.content === 'object' ? JSON.stringify(sourceComment.content) : String(sourceComment.content || '')) : '';
+                                                    const rawContent = item.content && !item.content.includes('(Không ghi chú)') ? item.content.trim() : '';
+
+                                                    // Nội dung khách cmt chốt thực tế (ưu tiên cmt gốc từ live, sau đó đến ghi chú lưu trên món)
+                                                    const fullCommentContent = sourceCommentStr || rawContent || `Sản phẩm ${itemUnitPrice}k`;
 
                                                     return (
                                                         <div 
                                                             key={`current-item-${idx}`}
-                                                            className={`p-3 rounded-xl border transition-all ${
+                                                            className={`py-1.5 px-2 rounded-xl transition-all flex items-center justify-between gap-1.5 mb-1 ${
                                                                 selectedCurrent.has(idx) 
-                                                                    ? 'bg-blue-950/40 border-blue-500/60 shadow-md ring-1 ring-blue-500/30' 
+                                                                    ? 'bg-blue-950/60 shadow-md ring-1 ring-blue-500/40' 
                                                                     : item.shipped 
-                                                                    ? 'bg-[#0b121c]/80 border-emerald-500/20 opacity-80' 
-                                                                    : 'bg-[#141f2e] border-white/10 hover:border-white/20 shadow-xs'
+                                                                    ? 'bg-[#09101a]/70 opacity-75' 
+                                                                    : 'bg-[#131d2b] hover:bg-[#182536]'
                                                             }`}
                                                         >
-                                                            {/* Dòng 1: Tên sản phẩm (Trái) & Thành tiền to đậm (Phải) */}
-                                                            <div className="flex items-start justify-between gap-2">
-                                                                <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                                                                    <input 
-                                                                        type="checkbox" 
-                                                                        className="rounded border-white/20 w-4 h-4 text-blue-600 focus:ring-blue-500 cursor-pointer shrink-0 mt-0.5"
-                                                                        checked={selectedCurrent.has(idx)}
-                                                                        onChange={(e) => {
-                                                                            const newSet = new Set(selectedCurrent);
-                                                                            if (e.target.checked) newSet.add(idx);
-                                                                            else newSet.delete(idx);
-                                                                            setSelectedCurrent(newSet);
-                                                                        }}
-                                                                    />
-                                                                    <div className="min-w-0 flex-1">
-                                                                        <div className={`font-black text-sm sm:text-base tracking-wide truncate ${item.shipped ? 'line-through text-gray-400' : 'text-white'}`}>
-                                                                            {displayName}
-                                                                        </div>
-                                                                    </div>
-                                                                </div>
-
-                                                                <div className="text-right shrink-0">
-                                                                    <span className={`font-mono font-black text-base sm:text-lg tracking-tight ${item.shipped ? 'text-gray-400 line-through' : 'text-white'}`}>
-                                                                        {itemTotalVnd.toLocaleString('vi-VN')}
+                                                            {/* Trái: Checkbox + STT + NỘI DUNG KHÁCH CMT CHỐT (Bấm vào cmt để mở popup sửa Giá × SL) */}
+                                                            <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                                                                <input 
+                                                                    type="checkbox" 
+                                                                    className="rounded border-white/20 w-3.5 h-3.5 text-blue-600 focus:ring-blue-500 cursor-pointer shrink-0"
+                                                                    checked={selectedCurrent.has(idx)} 
+                                                                    onChange={(e) => {
+                                                                        const newSet = new Set(selectedCurrent);
+                                                                        if (e.target.checked) newSet.add(idx);
+                                                                        else newSet.delete(idx);
+                                                                        setSelectedCurrent(newSet);
+                                                                    }}
+                                                                />
+                                                                <span className="font-mono text-[9px] text-gray-400 font-bold bg-black/40 px-1 py-0.2 rounded shrink-0">
+                                                                    #{idx + 1}
+                                                                </span>
+                                                                <div 
+                                                                    onClick={() => setEditingPriceQty({
+                                                                        platform,
+                                                                        user: cleanUser,
+                                                                        itemIndex: idx,
+                                                                        content: fullCommentContent,
+                                                                        unitPrice: itemUnitPrice,
+                                                                        quantity: itemQty,
+                                                                        isPast: false
+                                                                    })}
+                                                                    className="cursor-pointer group flex items-center gap-1.5 min-w-0 flex-1 hover:bg-white/5 py-1 px-1.5 -my-1 -ml-1 rounded-lg transition-colors select-none"
+                                                                    title="Bấm vào cmt để chỉnh sửa Giá × Số lượng"
+                                                                >
+                                                                    <span className="text-gray-400 font-normal text-[11px] shrink-0">💬</span>
+                                                                    <span className={`font-bold text-xs truncate ${item.shipped ? 'line-through text-gray-400' : 'text-amber-200 group-hover:text-cyan-300'}`}>
+                                                                        {fullCommentContent}
                                                                     </span>
+                                                                    {/* Khi có số lượng từ 2 trở lên thì (giá x sl) đằng sau cmt */}
+                                                                    {itemQty >= 2 && (
+                                                                        <span className="text-cyan-300 font-mono font-bold text-xs shrink-0 bg-cyan-950/60 px-1.5 py-0.2 rounded border border-cyan-500/30">
+                                                                            ({itemUnitPrice}k × {itemQty})
+                                                                        </span>
+                                                                    )}
                                                                 </div>
                                                             </div>
 
-                                                            {/* Dòng 2: Công thức [SL x Đơn giá] (Trái) & Các nút thao tác (Phải) */}
-                                                            <div className="flex items-center justify-between gap-2 mt-1.5 pt-1.5 border-t border-white/5 pl-6.5">
-                                                                <div className="text-xs sm:text-sm font-medium text-gray-400 font-mono flex items-center gap-1.5">
-                                                                    <span>{itemQty} x {itemUnitPriceVnd.toLocaleString('vi-VN')}</span>
-                                                                    <span className="text-[10px] text-gray-500 font-sans">({itemUnitPrice}k/cái)</span>
-                                                                </div>
+                                                            {/* Phải: Thành tiền + Nút Gửi + In + Xóa (tất cả trên 1 dòng duy nhất, siêu gọn gàng!) */}
+                                                            <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+                                                                {/* Thành tiền k */}
+                                                                <span className="text-emerald-400 font-mono font-black text-xs sm:text-sm min-w-[34px] sm:min-w-[42px] text-right">
+                                                                    {itemTotalK}k
+                                                                </span>
 
-                                                                <div className="flex items-center gap-1.5 shrink-0">
-                                                                    {/* Nút toggle trạng thái Đã gửi */}
-                                                                    <button
-                                                                        type="button"
-                                                                        onClick={() => store.toggleCurrentItemShipped(platform, cleanUser, idx)}
-                                                                        title={item.shipped ? "Bấm để đổi thành Chưa gửi" : "Bấm để đánh dấu Đã gửi"}
-                                                                        className={`text-[10px] font-bold px-2 py-0.8 rounded-lg border transition-all cursor-pointer flex items-center gap-1 ${
-                                                                            item.shipped 
-                                                                                ? 'bg-emerald-500/25 text-emerald-300 border-emerald-500/50 hover:bg-emerald-500/35' 
-                                                                                : 'bg-white/5 text-gray-400 border-white/15 hover:bg-emerald-950/40 hover:text-emerald-300 hover:border-emerald-500/40'
-                                                                        }`}
-                                                                    >
-                                                                        {item.shipped ? '✓ GỬI' : '📦 Chưa'}
-                                                                    </button>
+                                                                {/* Nút Trạng thái Gửi */}
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => store.toggleCurrentItemShipped(platform, cleanUser, idx)}
+                                                                    title={item.shipped ? "Đã gửi (bấm để đổi lại)" : "Chưa gửi (bấm để đánh dấu)"}
+                                                                    className={`text-[10px] font-bold px-1.5 py-1 rounded-md transition-all cursor-pointer flex items-center justify-center ${
+                                                                        item.shipped 
+                                                                            ? 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30' 
+                                                                            : 'bg-white/5 text-gray-400 hover:bg-white/10'
+                                                                    }`}
+                                                                >
+                                                                    {item.shipped ? '✓' : '📦'}
+                                                                </button>
 
-                                                                    {/* Nút In tem */}
-                                                                    <button 
-                                                                        onClick={() => {
-                                                                            let time = new Date().toLocaleTimeString('vi-VN', {hour:'2-digit',minute:'2-digit'});
-                                                                            const cleanPrintContent = `${displayName} (${itemUnitPrice}k x ${itemQty})`;
-                                                                            printLabel(store[platform].nicknames?.[cleanUser] ? `${cleanUser} (${store[platform].nicknames[cleanUser]})` : `#${getShortId(cleanUser)} ${cleanUser}`, cleanPrintContent, itemTotalK, time, PLATFORMS[platform].label);
-                                                                        }}
-                                                                        className="bg-green-600 hover:bg-green-500 text-white rounded-lg px-2 py-0.8 font-bold text-[11px] flex items-center gap-1 shadow-xs cursor-pointer active:scale-95 transition-all"
-                                                                        title="In tem dán món này"
-                                                                    >
-                                                                        🖨️ IN
-                                                                    </button>
+                                                                {/* Nút In */}
+                                                                <button 
+                                                                    onClick={() => {
+                                                                        let time = new Date().toLocaleTimeString('vi-VN', {hour:'2-digit',minute:'2-digit'});
+                                                                        const cleanPrintContent = `${fullCommentContent} (${itemUnitPrice}k x ${itemQty})`;
+                                                                        printLabel(store[platform].nicknames?.[cleanUser] ? `${cleanUser} (${store[platform].nicknames[cleanUser]})` : `#${getShortId(cleanUser)} ${cleanUser}`, cleanPrintContent, itemTotalK, time, PLATFORMS[platform].label);
+                                                                    }}
+                                                                    className="bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white rounded-md px-1.5 sm:px-2 py-1 font-bold text-[11px] whitespace-nowrap flex items-center gap-0.5 shadow-sm transition-all cursor-pointer"
+                                                                    title="In tem món này"
+                                                                >
+                                                                    🖨️
+                                                                </button>
 
-                                                                    {/* Nút Xóa món */}
-                                                                    <DeleteConfirmButton 
-                                                                        onDelete={() => store.deleteOrderItem(platform, cleanUser, idx, false)}
-                                                                        className="rounded-lg px-2 py-0.8 text-[11px]"
-                                                                    />
-                                                                </div>
+                                                                {/* Nút Xóa */}
+                                                                <DeleteConfirmButton 
+                                                                    onDelete={() => store.deleteOrderItem(platform, cleanUser, idx, false)}
+                                                                    className="rounded-md px-1.5 py-1 text-xs"
+                                                                />
                                                             </div>
                                                         </div>
                                                     );
@@ -2729,7 +2945,7 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
                                                     const totalPriceVnd = totalPriceK * 1000;
 
                                                     return (
-                                                        <div className="bg-gradient-to-r from-[#0a121d] via-[#0f1b2b] to-[#0a121d] border-2 border-emerald-500/40 rounded-2xl p-3.5 sm:p-4.5 flex items-center justify-between shadow-xl mt-3">
+                                                        <div className="bg-gradient-to-r from-[#0d1726] via-[#122033] to-[#0d1726] rounded-2xl p-3.5 sm:p-4 flex items-center justify-between shadow-lg mt-2">
                                                             <div>
                                                                 <div className="text-xs sm:text-sm font-black text-gray-400 tracking-wider uppercase font-mono">
                                                                     SL: {totalQty} CÁI
@@ -2769,7 +2985,7 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
                     <div>
                         <div className="text-sm font-bold text-gray-100 mb-3 flex justify-between items-center">
                             <div className="flex items-center gap-3">
-                                <span>📜 Lịch sử chốt đơn cũ</span>
+                                <span>⏳ Đang giữ đơn (các phiên trước)</span>
                                 {cust?.pastItems && cust.pastItems.length > 0 && (
                                     <label className="flex items-center gap-1.5 text-xs font-normal cursor-pointer text-gray-400 bg-[#1c242f] hover:bg-white/10 px-2 py-1 rounded transition-colors">
                                         <input 
@@ -2850,7 +3066,7 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
                                             <div className="text-center text-gray-400 py-4 bg-[#0e1621] rounded-xl border border-dashed border-white/10 text-xs">Chưa có lịch sử chốt đơn các phiên trước.</div>
                                         )
                                     ) : (
-                                        <div className="bg-[#0e1724] border border-white/10 rounded-2xl p-3 sm:p-4 shadow-sm mt-2 space-y-3">
+                                        <div className="bg-[#0b121c] rounded-2xl p-2 sm:p-2.5 shadow-md space-y-1.5 mt-2">
                                         {displayPastItems.reverse().map(({ item, originalIdx }) => {
                                             const d = new Date(item.createdAt || parseInt(item.id.substring(0,13)) || Date.now());
                                             const now = new Date();
@@ -2862,28 +3078,30 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
                                             if (isToday) dateStr = 'Hôm nay';
                                             else if (isYesterday) dateStr = 'Hôm qua';
 
-                                            const itemUnitPrice = item.unitPrice || item.price;
+                                            const itemUnitPrice = item.unitPrice || (item.quantity && item.price ? Math.round(item.price / item.quantity) : item.price);
                                             const itemQty = item.quantity || 1;
                                             const itemTotalK = item.price || (itemUnitPrice * itemQty);
-                                            const itemUnitPriceVnd = itemUnitPrice * 1000;
-                                            const itemTotalVnd = itemTotalK * 1000;
 
-                                            const displayName = (!item.content || item.content === "(Không ghi chú)" || item.content.includes("Không ghi chú")) 
-                                                ? `Sản phẩm ${itemUnitPrice}k` 
-                                                : item.content;
+                                            const sourceComment = item.sourceCommentId ? store[platform].comments?.find(c => c.id === item.sourceCommentId) : null;
+                                            const sourceCommentStr = sourceComment ? (typeof sourceComment.content === 'object' ? JSON.stringify(sourceComment.content) : String(sourceComment.content || '')) : '';
+                                            const rawContent = item.content && !item.content.includes('(Không ghi chú)') ? item.content.trim() : '';
+
+                                            // Nội dung khách cmt chốt thực tế
+                                            const fullCommentContent = sourceCommentStr || rawContent || `Sản phẩm ${itemUnitPrice}k`;
 
                                             return (
-                                            <div 
-                                                key={`past-${originalIdx}`} 
-                                                className={`p-3 rounded-xl border transition-all ${
-                                                    selectedPast.has(originalIdx) 
-                                                        ? 'bg-blue-950/40 border-blue-500/50 shadow-md' 
-                                                        : 'bg-[#141f2e] border-white/10'
-                                                }`}
-                                            >
-                                                {/* Dòng 1: Checkbox + Ngày + Tên món (Trái) & Thành tiền (Phải) */}
-                                                <div className="flex items-start justify-between gap-2">
-                                                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                                                <div 
+                                                    key={`past-${originalIdx}`}
+                                                    className={`py-1.5 px-2 rounded-xl transition-all flex items-center justify-between gap-1.5 mb-1 ${
+                                                        selectedPast.has(originalIdx) 
+                                                            ? 'bg-blue-950/60 shadow-md ring-1 ring-blue-500/40' 
+                                                            : item.shipped 
+                                                            ? 'bg-[#09101a]/70 opacity-75' 
+                                                            : 'bg-[#131d2b] hover:bg-[#182536]'
+                                                    }`}
+                                                >
+                                                    {/* Trái: Checkbox + Ngày + NỘI DUNG KHÁCH CMT CHỐT (Bấm vào cmt để mở popup sửa Giá × SL) */}
+                                                    <div className="flex items-center gap-1.5 min-w-0 flex-1">
                                                         <input 
                                                             type="checkbox" 
                                                             checked={selectedPast.has(originalIdx)} 
@@ -2893,51 +3111,96 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
                                                                 else newSet.add(originalIdx);
                                                                 setSelectedPast(newSet);
                                                             }}
-                                                            className="rounded border-white/20 w-4 h-4 text-blue-600 focus:ring-blue-500 cursor-pointer shrink-0 mt-0.5"
+                                                            className="rounded border-white/20 w-3.5 h-3.5 text-blue-600 focus:ring-blue-500 cursor-pointer shrink-0"
                                                         />
-                                                        <span className="text-[9px] font-bold px-1.5 py-0.5 bg-white/10 text-gray-400 rounded uppercase shrink-0 font-mono">
+                                                        <span className="font-mono text-[9px] text-gray-400 font-bold bg-black/40 px-1 py-0.2 rounded shrink-0">
                                                             {dateStr}
                                                         </span>
-                                                        <div className="min-w-0 flex-1">
-                                                            <div className={`font-black text-sm sm:text-base tracking-wide truncate ${item.shipped ? 'line-through text-gray-400' : 'text-white'}`}>
-                                                                {displayName}
-                                                            </div>
+                                                        <div 
+                                                            onClick={() => setEditingPriceQty({
+                                                                platform,
+                                                                user: cleanUser,
+                                                                itemIndex: originalIdx,
+                                                                content: fullCommentContent,
+                                                                unitPrice: itemUnitPrice,
+                                                                quantity: itemQty,
+                                                                isPast: true
+                                                            })}
+                                                            className="cursor-pointer group flex items-center gap-1.5 min-w-0 flex-1 hover:bg-white/5 py-1 px-1.5 -my-1 -ml-1 rounded-lg transition-colors select-none"
+                                                            title="Bấm vào cmt để chỉnh sửa Giá × Số lượng"
+                                                        >
+                                                            <span className="text-gray-400 font-normal text-[11px] shrink-0">💬</span>
+                                                            <span className={`font-bold text-xs truncate ${item.shipped ? 'line-through text-gray-400' : 'text-amber-200 group-hover:text-cyan-300'}`}>
+                                                                {fullCommentContent}
+                                                            </span>
+                                                            {/* Khi có số lượng từ 2 trở lên thì (giá x sl) đằng sau cmt */}
+                                                            {itemQty >= 2 && (
+                                                                <span className="text-cyan-300 font-mono font-bold text-xs shrink-0 bg-cyan-950/60 px-1.5 py-0.2 rounded border border-cyan-500/30">
+                                                                    ({itemUnitPrice}k × {itemQty})
+                                                                </span>
+                                                            )}
                                                         </div>
                                                     </div>
 
-                                                    <div className="text-right shrink-0">
-                                                        <span className="font-mono font-black text-base sm:text-lg tracking-tight text-white">
-                                                            {itemTotalVnd.toLocaleString('vi-VN')}
+                                                    {/* Phải: Thành tiền + Nút In + Xóa (tất cả trên 1 dòng!) */}
+                                                    <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+                                                        {/* Thành tiền k */}
+                                                        <span className="text-emerald-400 font-mono font-black text-xs sm:text-sm min-w-[34px] sm:min-w-[42px] text-right">
+                                                            {itemTotalK}k
                                                         </span>
-                                                    </div>
-                                                </div>
 
-                                                {/* Dòng 2: SL x Đơn giá (Trái) & Thao tác (Phải) */}
-                                                <div className="flex items-center justify-between gap-2 mt-1.5 pt-1.5 border-t border-white/5 pl-6">
-                                                    <div className="text-xs sm:text-sm font-medium text-gray-400 font-mono flex items-center gap-1.5">
-                                                        <span>{itemQty} x {itemUnitPriceVnd.toLocaleString('vi-VN')}</span>
-                                                        <span className="text-[10px] text-gray-500 font-sans">({itemUnitPrice}k/cái)</span>
-                                                    </div>
-
-                                                    <div className="flex items-center gap-1.5 shrink-0">
+                                                        {/* Nút In */}
                                                         <button 
                                                             onClick={() => {
                                                                 let time = new Date().toLocaleTimeString('vi-VN', {hour:'2-digit',minute:'2-digit'});
-                                                                const cleanPrintContent = `${displayName} (${itemUnitPrice}k x ${itemQty})`;
+                                                                const cleanPrintContent = `${fullCommentContent} (${itemUnitPrice}k x ${itemQty})`;
                                                                 printLabel(store[platform].nicknames?.[cleanUser] ? `${cleanUser} (${store[platform].nicknames[cleanUser]})` : `#${getShortId(cleanUser)} ${cleanUser}`, cleanPrintContent, itemTotalK, time, PLATFORMS[platform].label);
                                                             }}
-                                                            className="bg-green-600 hover:bg-green-700 text-white rounded-lg px-2 py-0.8 font-bold text-[11px] whitespace-nowrap flex items-center gap-1 shadow-xs cursor-pointer active:scale-95 transition-all"
+                                                            className="bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white rounded-md px-1.5 sm:px-2 py-1 font-bold text-[11px] whitespace-nowrap flex items-center gap-0.5 shadow-sm transition-all cursor-pointer"
+                                                            title="In tem món này"
                                                         >
-                                                            🖨️ IN
+                                                            🖨️
                                                         </button>
+
+                                                        {/* Nút Xóa */}
                                                         <DeleteConfirmButton 
                                                             onDelete={() => store.deleteOrderItem(platform, cleanUser, originalIdx, true)}
-                                                            className="rounded-lg px-2 py-0.8 text-[11px]"
+                                                            className="rounded-md px-1.5 py-1 text-xs"
                                                         />
                                                     </div>
                                                 </div>
-                                            </div>
-                                        )})}
+                                            );
+                                        })}
+
+                                        {/* Card Tổng Lịch Sử Cũ */}
+                                        {(() => {
+                                            const pastTotalQty = displayPastItems.reduce((sum, { item }) => sum + (item.quantity || 1), 0);
+                                            const pastTotalPriceK = displayPastItems.reduce((sum, { item }) => {
+                                                const itemUnitPrice = item.unitPrice || (item.quantity && item.price ? Math.round(item.price / item.quantity) : item.price);
+                                                const itemQty = item.quantity || 1;
+                                                return sum + (item.price || (itemUnitPrice * itemQty));
+                                            }, 0);
+                                            const pastTotalPriceVnd = pastTotalPriceK * 1000;
+
+                                            return (
+                                                <div className="bg-gradient-to-r from-[#0d1726] via-[#122033] to-[#0d1726] rounded-2xl p-3 sm:p-4 flex items-center justify-between shadow-lg mt-2">
+                                                    <div>
+                                                        <div className="text-xs sm:text-sm font-black text-gray-400 tracking-wider uppercase font-mono">
+                                                            SL: {pastTotalQty} CÁI
+                                                        </div>
+                                                        <div className="text-base sm:text-xl font-black text-white tracking-wide uppercase mt-0.5">
+                                                            TỔNG LỊCH SỬ CŨ
+                                                        </div>
+                                                    </div>
+                                                    <div className="text-right">
+                                                        <span className="text-xl sm:text-2xl font-black text-cyan-400 font-mono tracking-tight">
+                                                            {pastTotalPriceVnd.toLocaleString('vi-VN')}
+                                                        </span>
+                                                        <span className="text-cyan-400 font-bold text-sm sm:text-base ml-1">đ</span>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })()}
                                         </div>
                                     )}
                                 </div>
@@ -2969,6 +3232,14 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
                     // Refresh data or clear
                 }}
             />
+
+            {/* Quick Price x Qty Edit Modal */}
+            {editingPriceQty && (
+                <QuickPriceQtyModal
+                    target={editingPriceQty}
+                    onClose={() => setEditingPriceQty(null)}
+                />
+            )}
         </div>
     );
 }
@@ -2995,6 +3266,7 @@ export function CustomersModal({
     const [selectedPlatform, setSelectedPlatform] = useState<Platform | 'all'>('all');
     const [selectedTag, setSelectedTag] = useState<string>('all');
     const [statusFilter, setStatusFilter] = useState<'all' | 'has_orders' | 'holding' | 'shipped'>('all');
+    const [activeDropdown, setActiveDropdown] = useState<'platform' | 'status' | 'tag' | null>(null);
     const [searchTerm, setSearchTerm] = useState('');
     const [viewMode, setViewMode] = useState<'list' | 'grid'>(() => {
         try {
@@ -3024,160 +3296,175 @@ export function CustomersModal({
         lastScrollY.current = currentY;
     };
 
-    let customerList: { 
-        user: string; 
-        platform: Platform; 
-        data: CustomerData; 
-        tag: string; 
-        sevenDaysRevenue: number; 
-        hasRecent: boolean; 
-        hasOldItems: boolean;
-        activeItemsCount: number;
-        activeItemsTotal: number;
-        holdingCount: number;
-        holdingTotal: number;
-        hasActiveOrders: boolean;
-        isHolding: boolean;
-        isAllShipped: boolean;
-        shippedPancakeOrder: any;
-        avatar?: string;
-    }[] = [];
-
-    const now = Date.now();
-    const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
-
-    (['tiktok', 'facebook', 'shopee'] as Platform[]).forEach(p => {
-        if (selectedPlatform !== 'all' && selectedPlatform !== p) return;
-        const custs = store[p].customers;
-        const comments = store[p].comments;
-
-        Object.keys(custs).forEach(rawUser => {
-            const user = normalizeUser(rawUser);
-            const data = custs[rawUser];
-            const tag = store[p].tags[user] || 'NORMAL';
-            
-            let sevenDaysRevenue = 0;
-            let hasRecent = false;
-            let oldestUnshippedTime = now;
-            
-            const allItems = [...(data.items || []), ...(data.pastItems || [])];
-            allItems.forEach(item => {
-                const itemTime = item.createdAt || (item.id ? parseInt(String(item.id).substring(0, 13)) : 0) || 0;
-                if (itemTime >= sevenDaysAgo) {
-                    sevenDaysRevenue += (item.price || 0);
-                    hasRecent = true;
-                }
-                if (!item.shipped && itemTime > 0 && itemTime < oldestUnshippedTime) {
-                    oldestUnshippedTime = itemTime;
-                }
-            });
-
-            // Đơn đang còn trong giỏ
-            const activeItems = data.items || [];
-            const activeItemsCount = activeItems.length;
-            const activeItemsTotal = data.total || activeItems.reduce((s, it) => s + (it.price || 0), 0);
-            
-            // Kiểm tra trạng thái đã đi hết đơn trên Pancake POS
-            const custInsight = getCustomerInsight(user);
-            const shippedStatus = checkCustomerPancakeShippedStatus(data, custInsight);
-            const isAllShipped = shippedStatus.isAllShipped;
-            const shippedPancakeOrder = shippedStatus.latestPancakeOrder;
-
-            // Đơn còn cần xử lý (nếu đã đi hết đơn trên Pancake thì không còn coi là nợ đơn)
-            const hasActiveOrders = !isAllShipped && (data.items?.some(it => !it.shipped) || (data.count > 0 && activeItemsTotal > 0));
-            
-            // Đơn đang giữ phiên trước chưa giao (unshipped)
-            const unshippedPastItems = (data.pastItems || []).filter(it => !it.shipped);
-            const holdingCount = unshippedPastItems.length;
-            const holdingTotal = unshippedPastItems.reduce((s, it) => s + (it.price || 0), 0);
-            const isHolding = !isAllShipped && (holdingCount > 0 || (tag as string) === 'HOLD');
-
-            // Cảnh báo nếu có đơn giữ quá 3 ngày (72h)
-            const hasOldItems = (now - oldestUnshippedTime > 3 * 24 * 60 * 60 * 1000);
-
-            // Tìm avatar nếu có từ comments
-            const userComment = comments.find(c => normalizeUser(c.user) === user && c.avatar);
-            const avatar = userComment?.avatar;
-
-            customerList.push({ 
-                user, 
-                platform: p, 
-                data, 
-                tag, 
-                sevenDaysRevenue, 
-                hasRecent, 
-                hasOldItems, 
-                activeItemsCount,
-                activeItemsTotal,
-                holdingCount,
-                holdingTotal,
-                hasActiveOrders,
-                isHolding,
-                isAllShipped,
-                shippedPancakeOrder,
-                avatar
-            });
-        });
-    });
-
-    // Thống kê nhanh số lượng phục vụ hiển thị trên nút lọc
-    const totalCustomersWithOrders = customerList.filter(c => c.hasActiveOrders).length;
-    const totalCustomersHolding = customerList.filter(c => c.isHolding).length;
-    const totalCustomersShipped = customerList.filter(c => c.isAllShipped).length;
-
-    // Filter by status (Còn đơn / Đang giữ)
-    if (statusFilter === 'has_orders') {
-        customerList = customerList.filter(c => c.hasActiveOrders);
-    } else if (statusFilter === 'holding') {
-        customerList = customerList.filter(c => c.isHolding);
-    } else if (statusFilter === 'shipped') {
-        customerList = customerList.filter(c => c.isAllShipped);
-    }
-
-    // Filter by tag
-    if (selectedTag !== 'all') {
-        customerList = customerList.filter(c => c.tag === selectedTag);
-    }
-
-    // Filter by search term (combining local searchTerm or searchKeyword from global header)
     const effectiveSearch = (searchTerm || searchKeyword || '').trim().toLowerCase();
-    if (effectiveSearch) {
-        customerList = customerList.filter(c => {
-            if ((effectiveSearch === '/coc' || effectiveSearch === '/coc50') && c.tag === 'COC') return true;
-            if ((effectiveSearch === '/coc' || effectiveSearch === '/coc100') && c.tag === 'COC_100') return true;
-            if (effectiveSearch === '/quen' && c.tag === 'VIP') return true;
-            if (effectiveSearch === '/vip' && c.tag === 'VIP') return true;
-            if (effectiveSearch === '/dao' && c.tag === 'DAO') return true;
-            if (effectiveSearch === '/chan' && c.tag === 'CHAN') return true;
-            if (effectiveSearch === '/bom' && c.tag === 'BOM') return true;
-            if (effectiveSearch === '/giu' && c.isHolding) return true;
-            if (effectiveSearch === '/condon' && c.hasActiveOrders) return true;
-            if (effectiveSearch === '/top10') return true;
-            if (effectiveSearch.startsWith('/')) return false;
 
-            const nick = store[c.platform].nicknames?.[c.user] || '';
-            const shortId = getShortId(c.user).toLowerCase();
-            return c.user.toLowerCase().includes(effectiveSearch) ||
-                   nick.toLowerCase().includes(effectiveSearch) ||
-                   shortId.includes(effectiveSearch) ||
-                   ('#' + shortId).includes(effectiveSearch);
+    const { customerList, totalCustomersDangChot, totalCustomersHolding, totalCustomersShipped } = useMemo(() => {
+        let list: { 
+            user: string; 
+            platform: Platform; 
+            data: CustomerData; 
+            tag: string; 
+            sevenDaysRevenue: number; 
+            hasRecent: boolean; 
+            hasOldItems: boolean;
+            dangChotQty: number;
+            dangChotTotal: number;
+            dangGiuQty: number;
+            dangGiuTotal: number;
+            daChotQty: number;
+            daChotTotal: number;
+            hasDangChot: boolean;
+            isHolding: boolean;
+            isAllShipped: boolean;
+            shippedPancakeOrder: any;
+            avatar?: string;
+        }[] = [];
+
+        const now = Date.now();
+        const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+
+        (['tiktok', 'facebook', 'shopee'] as Platform[]).forEach(p => {
+            if (selectedPlatform !== 'all' && selectedPlatform !== p) return;
+            const custs = store[p].customers;
+
+            Object.keys(custs).forEach(rawUser => {
+                const user = normalizeUser(rawUser);
+                const data = custs[rawUser];
+                const tag = store[p].tags[user] || 'NORMAL';
+                
+                let sevenDaysRevenue = 0;
+                let hasRecent = false;
+                let oldestUnshippedTime = now;
+                
+                const allItems = [...(data.items || []), ...(data.pastItems || [])];
+                allItems.forEach(item => {
+                    const itemTime = item.createdAt || (item.id ? parseInt(String(item.id).substring(0, 13)) : 0) || 0;
+                    if (itemTime >= sevenDaysAgo) {
+                        sevenDaysRevenue += (item.price || 0);
+                        hasRecent = true;
+                    }
+                    if (!item.shipped && itemTime > 0 && itemTime < oldestUnshippedTime) {
+                        oldestUnshippedTime = itemTime;
+                    }
+                });
+
+                // Kiểm tra trạng thái đã đi hết đơn trên Pancake POS
+                const custInsight = getCustomerInsight(user);
+                const shippedStatus = checkCustomerPancakeShippedStatus(data, custInsight);
+                const isAllShipped = shippedStatus.isAllShipped;
+                const shippedPancakeOrder = shippedStatus.latestPancakeOrder;
+
+                // 1. Đang chốt: đơn đang chốt hôm nay / phiên này
+                const activeItems = (data.items || []).filter(it => !it.shipped);
+                const dangChotQty = isAllShipped ? 0 : activeItems.reduce((s, it) => s + (it.quantity || 1), 0);
+                const dangChotTotal = isAllShipped ? 0 : activeItems.reduce((s, it) => s + (it.price || 0), 0);
+                const hasDangChot = !isAllShipped && (dangChotQty > 0);
+
+                // 2. Đang giữ đơn: đơn đang chốt các phiên trước chưa giao
+                const unshippedPastItems = (data.pastItems || []).filter(it => !it.shipped);
+                const dangGiuQty = isAllShipped ? 0 : unshippedPastItems.reduce((s, it) => s + (it.quantity || 1), 0);
+                const dangGiuTotal = isAllShipped ? 0 : unshippedPastItems.reduce((s, it) => s + (it.price || 0), 0);
+                const isHolding = !isAllShipped && (dangGiuQty > 0 || (tag as string) === 'HOLD' || (tag as string) === 'GIU');
+
+                // 3. Đã chốt: TỔNG của "Đang chốt" và "Đang giữ" cộng lại số lượng và thành tiền
+                const daChotQty = isAllShipped ? 0 : (dangChotQty + dangGiuQty);
+                const daChotTotal = isAllShipped ? 0 : (dangChotTotal + dangGiuTotal);
+
+                // Cảnh báo nếu có đơn giữ quá 3 ngày (72h)
+                const hasOldItems = (now - oldestUnshippedTime > 3 * 24 * 60 * 60 * 1000);
+
+                // O(1) instant avatar lookup
+                const avatar = getCustomerAvatar(user, p) || undefined;
+
+                list.push({ 
+                    user, 
+                    platform: p, 
+                    data, 
+                    tag, 
+                    sevenDaysRevenue, 
+                    hasRecent, 
+                    hasOldItems, 
+                    dangChotQty,
+                    dangChotTotal,
+                    dangGiuQty,
+                    dangGiuTotal,
+                    daChotQty,
+                    daChotTotal,
+                    hasDangChot,
+                    isHolding,
+                    isAllShipped,
+                    shippedPancakeOrder,
+                    avatar
+                });
+            });
         });
-    }
 
-    // Sắp xếp: tổng 7 ngày cao nhất lên đầu, sau đó đến tổng all time
-    customerList.sort((a, b) => {
-        if (effectiveSearch === '/top10') {
-            return (b.data.lastTime || 0) - (a.data.lastTime || 0);
-        }
+        // Thống kê nhanh số lượng phục vụ hiển thị trên nút lọc
+        const dangChot = list.filter(c => c.hasDangChot).length;
+        const holding = list.filter(c => c.isHolding).length;
+        const shipped = list.filter(c => c.isAllShipped).length;
+
+        // Filter by status (Đang chốt / Đang giữ / Đã đi hết)
         if (statusFilter === 'has_orders') {
-            return b.activeItemsCount - a.activeItemsCount;
+            list = list.filter(c => c.hasDangChot);
+        } else if (statusFilter === 'holding') {
+            list = list.filter(c => c.isHolding);
+        } else if (statusFilter === 'shipped') {
+            list = list.filter(c => c.isAllShipped);
         }
-        if (statusFilter === 'holding') {
-            return b.holdingCount - a.holdingCount;
+
+        // Filter by tag
+        if (selectedTag !== 'all') {
+            list = list.filter(c => c.tag === selectedTag);
         }
-        if (b.sevenDaysRevenue !== a.sevenDaysRevenue) return b.sevenDaysRevenue - a.sevenDaysRevenue;
-        return (b.data.total || 0) - (a.data.total || 0);
-    });
+
+        // Filter by search term
+        if (effectiveSearch) {
+            list = list.filter(c => {
+                if ((effectiveSearch === '/coc' || effectiveSearch === '/coc50') && c.tag === 'COC') return true;
+                if ((effectiveSearch === '/coc' || effectiveSearch === '/coc100') && c.tag === 'COC_100') return true;
+                if (effectiveSearch === '/quen' && c.tag === 'VIP') return true;
+                if (effectiveSearch === '/vip' && c.tag === 'VIP') return true;
+                if (effectiveSearch === '/dao' && c.tag === 'DAO') return true;
+                if (effectiveSearch === '/chan' && c.tag === 'CHAN') return true;
+                if (effectiveSearch === '/bom' && c.tag === 'BOM') return true;
+                if ((effectiveSearch === '/giu' || effectiveSearch === '/danggiu' || effectiveSearch === '/dg') && c.isHolding) return true;
+                if ((effectiveSearch === '/condon' || effectiveSearch === '/dangchot' || effectiveSearch === '/dc') && c.hasDangChot) return true;
+                if (effectiveSearch === '/top10') return true;
+                if (effectiveSearch.startsWith('/')) return false;
+
+                const nick = store[c.platform].nicknames?.[c.user] || '';
+                const shortId = getShortId(c.user).toLowerCase();
+                return c.user.toLowerCase().includes(effectiveSearch) ||
+                       nick.toLowerCase().includes(effectiveSearch) ||
+                       shortId.includes(effectiveSearch) ||
+                       ('#' + shortId).includes(effectiveSearch);
+            });
+        }
+
+        // Sắp xếp: ưu tiên có đơn chốt -> tổng 7 ngày cao nhất lên đầu -> tổng all time
+        list.sort((a, b) => {
+            if (effectiveSearch === '/top10') {
+                return (b.data.lastTime || 0) - (a.data.lastTime || 0);
+            }
+            if (statusFilter === 'has_orders') {
+                return b.dangChotQty - a.dangChotQty;
+            }
+            if (statusFilter === 'holding') {
+                return b.dangGiuQty - a.dangGiuQty;
+            }
+            if (b.daChotQty !== a.daChotQty) return b.daChotQty - a.daChotQty;
+            if (b.sevenDaysRevenue !== a.sevenDaysRevenue) return b.sevenDaysRevenue - a.sevenDaysRevenue;
+            return (b.data.total || 0) - (a.data.total || 0);
+        });
+
+        return {
+            customerList: list,
+            totalCustomersDangChot: dangChot,
+            totalCustomersHolding: holding,
+            totalCustomersShipped: shipped
+        };
+    }, [selectedPlatform, store.tiktok.customers, store.facebook.customers, store.shopee.customers, store.tiktok.tags, store.facebook.tags, store.shopee.tags, store.tiktok.nicknames, store.facebook.nicknames, store.shopee.nicknames, statusFilter, selectedTag, effectiveSearch]);
 
     const totalAllPlatforms = (['tiktok', 'facebook', 'shopee'] as Platform[]).reduce(
         (sum, p) => sum + Object.keys(store[p].customers).length, 0
@@ -3208,210 +3495,159 @@ export function CustomersModal({
                     </div>
                 )}
 
-                {/* Filters & View Mode Bar */}
-                <div className="p-3 bg-[#1c242f] border-b border-white/10 shrink-0 space-y-2.5">
-                    {/* Platform Tabs & View Mode Switcher */}
-                    <div className="flex justify-between items-center gap-2">
-                        <div className="flex gap-1.5 overflow-x-auto pb-0.5 hide-scrollbar flex-1">
-                            <button
-                                onClick={() => setSelectedPlatform('all')}
-                                className={`px-3 py-1.5 text-xs font-bold rounded-xl whitespace-nowrap transition-all cursor-pointer ${
-                                    selectedPlatform === 'all' 
-                                        ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20' 
-                                        : 'bg-[#0e1621] border border-white/10 text-gray-400 hover:bg-white/5'
-                                }`}
-                            >
-                                🌐 Tất cả ({totalAllPlatforms})
-                            </button>
-                            {(['tiktok', 'facebook', 'shopee'] as Platform[]).map(p => {
-                                const custCount = Object.keys(store[p].customers).length;
-                                return (
-                                    <button
-                                        key={p}
-                                        onClick={() => setSelectedPlatform(p)}
-                                        className={`px-3 py-1.5 text-xs font-bold rounded-xl whitespace-nowrap transition-all cursor-pointer ${
-                                            selectedPlatform === p 
-                                                ? `${PLATFORMS[p].bgClass} text-white shadow-md ring-2 ring-white/20` 
-                                                : 'bg-[#0e1621] border border-white/10 text-gray-400 hover:bg-white/5'
-                                        }`}
-                                    >
-                                        {PLATFORMS[p].label} ({custCount})
-                                    </button>
-                                );
-                            })}
-                        </div>
-
-                        {/* View Mode Toggle: Danh sách vs Dạng ô */}
-                        <div className="flex items-center bg-[#0e1621] p-1 rounded-xl border border-white/10 shrink-0">
-                            <button
-                                type="button"
-                                onClick={() => handleSetViewMode('list')}
-                                className={`p-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center cursor-pointer ${
-                                    viewMode === 'list'
-                                        ? 'bg-blue-600 text-white shadow-sm'
-                                        : 'text-gray-400 hover:text-white'
-                                }`}
-                                title="Xem dạng danh sách"
-                            >
-                                <List size={16} />
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => handleSetViewMode('grid')}
-                                className={`p-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center cursor-pointer ${
-                                    viewMode === 'grid'
-                                        ? 'bg-blue-600 text-white shadow-sm'
-                                        : 'text-gray-400 hover:text-white'
-                                }`}
-                                title="Xem dạng ô (Grid)"
-                            >
-                                <LayoutGrid size={16} />
-                            </button>
-                        </div>
-                    </div>
-
-                    {/* Quick Status & Tag Pills */}
-                    <div className="flex gap-1.5 overflow-x-auto pb-0.5 hide-scrollbar text-[11px] items-center">
-                        {/* Tất cả */}
-                        <button
-                            onClick={() => { setSelectedTag('all'); setStatusFilter('all'); }}
-                            className={`px-2.5 py-1 rounded-lg font-bold whitespace-nowrap transition-all cursor-pointer ${
-                                selectedTag === 'all' && statusFilter === 'all'
-                                    ? 'bg-white/25 text-white border border-white/40 shadow-sm' 
-                                    : 'bg-[#0e1621] text-gray-400 border border-white/10 hover:bg-white/5'
-                            }`}
-                        >
-                            Tất cả ({customerList.length})
-                        </button>
-
-                        {/* BỘ LỌC ĐANG CÒN ĐƠN */}
-                        <button
-                            onClick={() => setStatusFilter(statusFilter === 'has_orders' ? 'all' : 'has_orders')}
-                            className={`px-2.5 py-1 rounded-lg font-bold whitespace-nowrap transition-all cursor-pointer flex items-center gap-1 ${
-                                statusFilter === 'has_orders' 
-                                    ? 'bg-emerald-600 text-white shadow-md ring-1 ring-emerald-400' 
-                                    : 'bg-[#0e1621] text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/10'
-                            }`}
-                            title="Lọc khách hàng đang có đơn trong giỏ hàng"
-                        >
-                            <span>🛍️ Còn đơn</span>
-                            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-black/40 font-mono">
-                                {totalCustomersWithOrders}
-                            </span>
-                        </button>
-
-                        {/* BỘ LỌC ĐANG GIỮ */}
-                        <button
-                            onClick={() => setStatusFilter(statusFilter === 'holding' ? 'all' : 'holding')}
-                            className={`px-2.5 py-1 rounded-lg font-bold whitespace-nowrap transition-all cursor-pointer flex items-center gap-1 ${
-                                statusFilter === 'holding' 
-                                    ? 'bg-amber-600 text-white shadow-md ring-1 ring-amber-400' 
-                                    : 'bg-[#0e1621] text-amber-400 border border-amber-500/30 hover:bg-amber-500/10'
-                            }`}
-                            title="Lọc khách hàng đang giữ hàng phiên trước chưa giao"
-                        >
-                            <span>⏳ Đang giữ</span>
-                            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-black/40 font-mono">
-                                {totalCustomersHolding}
-                            </span>
-                        </button>
-                        {/* BỘ LỌC ĐÃ ĐI HẾT ĐƠN */}
-                        {totalCustomersShipped > 0 && (
-                            <button
-                                onClick={() => setStatusFilter(statusFilter === 'shipped' ? 'all' : 'shipped')}
-                                className={`px-2.5 py-1 rounded-lg font-bold whitespace-nowrap transition-all cursor-pointer flex items-center gap-1 ${
-                                    statusFilter === 'shipped' 
-                                        ? 'bg-emerald-700 text-white shadow-md ring-1 ring-emerald-400' 
-                                        : 'bg-[#0e1621] text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/10'
-                                }`}
-                                title="Lọc khách hàng đã có đơn Pancake mới hơn ngày chốt (đã đi hết đơn)"
-                            >
-                                <span>✅ Đã đi hết</span>
-                                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-black/40 font-mono">
-                                    {totalCustomersShipped}
+                {/* 1-Row Compact Filter Bar */}
+                <div className="px-3 py-2 bg-[#1c242f] border-b border-white/10 shrink-0 flex items-center justify-between gap-1.5 z-20">
+                    <div className="flex items-center gap-1.5 overflow-x-auto hide-scrollbar flex-1 py-0.5">
+                        {/* 1. Platform Dropdown */}
+                        <div className="relative shrink-0">
+                            <div className={`px-2.5 py-1.5 text-xs font-bold rounded-lg whitespace-nowrap flex items-center gap-1.5 border shadow-xs pointer-events-none ${
+                                selectedPlatform !== 'all' 
+                                    ? `${PLATFORMS[selectedPlatform].bgClass} text-white border-white/20 ring-1 ring-white/20` 
+                                    : 'bg-blue-600 border-blue-500 text-white'
+                            }`}>
+                                <span>{selectedPlatform !== 'all' ? PLATFORMS[selectedPlatform].label : '🌐 Tất cả sàn'}</span>
+                                <span className="text-[10px] opacity-80 font-mono font-normal">
+                                    ({selectedPlatform !== 'all' 
+                                        ? Object.keys(store[selectedPlatform].customers).length 
+                                        : totalAllPlatforms})
                                 </span>
-                            </button>
-                        )}
+                                <ChevronDown size={12} className="opacity-80" />
+                            </div>
+                            <select
+                                value={selectedPlatform}
+                                onChange={(e) => setSelectedPlatform(e.target.value as any)}
+                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10 text-base"
+                            >
+                                <option value="all" className="bg-[#1c242f] text-white">🌐 Tất cả sàn ({totalAllPlatforms})</option>
+                                {(['tiktok', 'facebook', 'shopee'] as Platform[]).map(p => {
+                                    const count = Object.keys(store[p].customers).length;
+                                    return (
+                                        <option key={p} value={p} className="bg-[#1c242f] text-white">
+                                            {PLATFORMS[p].label} ({count})
+                                        </option>
+                                    );
+                                })}
+                            </select>
+                        </div>
 
-                        <div className="w-[1px] h-3.5 bg-white/20 shrink-0 mx-0.5" />
+                        {/* 2. Status Dropdown */}
+                        <div className="relative shrink-0">
+                            <div className={`px-2.5 py-1.5 text-xs font-bold rounded-lg whitespace-nowrap flex items-center gap-1.5 border shadow-xs pointer-events-none ${
+                                statusFilter === 'has_orders' 
+                                    ? 'bg-emerald-600 border-emerald-500 text-white' 
+                                    : statusFilter === 'holding' 
+                                    ? 'bg-amber-600 border-amber-500 text-white' 
+                                    : statusFilter === 'shipped' 
+                                    ? 'bg-emerald-700 border-emerald-600 text-white' 
+                                    : 'bg-[#0e1621] border-white/10 text-gray-300'
+                            }`}>
+                                <span>
+                                    {statusFilter === 'all' ? '📊 Trạng thái' :
+                                     statusFilter === 'has_orders' ? `🛍️ Đang chốt (${totalCustomersDangChot})` :
+                                     statusFilter === 'holding' ? `⏳ Đang giữ (${totalCustomersHolding})` :
+                                     `✅ Đã đi hết (${totalCustomersShipped})`}
+                                </span>
+                                <ChevronDown size={12} className="opacity-80" />
+                            </div>
+                            <select
+                                value={statusFilter}
+                                onChange={(e) => setStatusFilter(e.target.value as any)}
+                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10 text-base"
+                            >
+                                <option value="all" className="bg-[#1c242f] text-white">📊 Tất cả trạng thái</option>
+                                <option value="has_orders" className="bg-[#1c242f] text-white">🛍️ Đang chốt hôm nay ({totalCustomersDangChot})</option>
+                                <option value="holding" className="bg-[#1c242f] text-white">⏳ Đang giữ đơn ({totalCustomersHolding})</option>
+                                {totalCustomersShipped > 0 && (
+                                    <option value="shipped" className="bg-[#1c242f] text-white">✅ Đã đi hết đơn ({totalCustomersShipped})</option>
+                                )}
+                            </select>
+                        </div>
 
-                        {/* Tag Pills */}
-                        <button
-                            onClick={() => setSelectedTag(selectedTag === 'VIP' ? 'all' : 'VIP')}
-                            className={`px-2.5 py-1 rounded-lg font-bold whitespace-nowrap transition-all cursor-pointer ${
-                                selectedTag === 'VIP' ? 'bg-orange-500 text-white shadow-sm' : 'bg-[#0e1621] text-orange-400 border border-orange-500/20'
-                            }`}
-                        >
-                            🌟 Quen (VIP)
-                        </button>
-
-                        <button
-                            onClick={() => setSelectedTag(selectedTag === 'COC' ? 'all' : 'COC')}
-                            className={`px-2.5 py-1 rounded-lg font-bold whitespace-nowrap transition-all cursor-pointer ${
-                                selectedTag === 'COC' ? 'bg-cyan-600 text-white shadow-sm' : 'bg-[#0e1621] text-cyan-400 border border-cyan-500/20'
-                            }`}
-                        >
-                            💧 Cọc 50k
-                        </button>
-
-                        <button
-                            onClick={() => setSelectedTag(selectedTag === 'COC_100' ? 'all' : 'COC_100')}
-                            className={`px-2.5 py-1 rounded-lg font-bold whitespace-nowrap transition-all cursor-pointer ${
-                                selectedTag === 'COC_100' ? 'bg-blue-600 text-white shadow-sm' : 'bg-[#0e1621] text-blue-400 border border-blue-500/20'
-                            }`}
-                        >
-                            💧 Cọc 100k
-                        </button>
-
-                        <button
-                            onClick={() => setSelectedTag(selectedTag === 'DAO' ? 'all' : 'DAO')}
-                            className={`px-2.5 py-1 rounded-lg font-bold whitespace-nowrap transition-all cursor-pointer ${
-                                selectedTag === 'DAO' ? 'bg-gray-600 text-white shadow-sm' : 'bg-[#0e1621] text-gray-400 border border-white/10'
-                            }`}
-                        >
-                            👻 Dạo
-                        </button>
-
-                        <button
-                            onClick={() => setSelectedTag(selectedTag === 'BOM' ? 'all' : 'BOM')}
-                            className={`px-2.5 py-1 rounded-lg font-bold whitespace-nowrap transition-all cursor-pointer ${
-                                selectedTag === 'BOM' ? 'bg-red-600 text-white shadow-sm' : 'bg-[#0e1621] text-red-400 border border-red-500/20'
-                            }`}
-                        >
-                            ⚠️ BOM
-                        </button>
-
-                        <button
-                            onClick={() => setSelectedTag(selectedTag === 'CHAN' ? 'all' : 'CHAN')}
-                            className={`px-2.5 py-1 rounded-lg font-bold whitespace-nowrap transition-all cursor-pointer ${
-                                selectedTag === 'CHAN' ? 'bg-black text-white border border-red-500/40' : 'bg-[#0e1621] text-gray-500 border border-white/5'
-                            }`}
-                        >
-                            ⛔ Chặn
-                        </button>
+                        {/* 3. Tag Dropdown */}
+                        <div className="relative shrink-0">
+                            <div className={`px-2.5 py-1.5 text-xs font-bold rounded-lg whitespace-nowrap flex items-center gap-1.5 border shadow-xs pointer-events-none ${
+                                selectedTag !== 'all' 
+                                    ? 'bg-orange-600 border-orange-500 text-white' 
+                                    : 'bg-[#0e1621] border-white/10 text-gray-300'
+                            }`}>
+                                <span>
+                                    {selectedTag === 'all' ? '🏷️ Nhãn' :
+                                     selectedTag === 'VIP' ? '🌟 Quen (VIP)' :
+                                     selectedTag === 'COC' ? '💧 Cọc 50k' :
+                                     selectedTag === 'COC_100' ? '💧 Cọc 100k' :
+                                     selectedTag === 'DAO' ? '👻 Dạo' :
+                                     selectedTag === 'BOM' ? '⚠️ BOM' :
+                                     selectedTag === 'CHAN' ? '⛔ Chặn' : `🏷️ ${selectedTag}`}
+                                </span>
+                                <ChevronDown size={12} className="opacity-80" />
+                            </div>
+                            <select
+                                value={selectedTag}
+                                onChange={(e) => setSelectedTag(e.target.value)}
+                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10 text-base"
+                            >
+                                <option value="all" className="bg-[#1c242f] text-white">🏷️ Tất cả nhãn</option>
+                                <option value="VIP" className="bg-[#1c242f] text-white">🌟 Quen (VIP)</option>
+                                <option value="COC" className="bg-[#1c242f] text-white">💧 Cọc 50k</option>
+                                <option value="COC_100" className="bg-[#1c242f] text-white">💧 Cọc 100k</option>
+                                <option value="DAO" className="bg-[#1c242f] text-white">👻 Dạo</option>
+                                <option value="BOM" className="bg-[#1c242f] text-white">⚠️ BOM</option>
+                                <option value="CHAN" className="bg-[#1c242f] text-white">⛔ Chặn</option>
+                            </select>
+                        </div>
                     </div>
 
-                    {/* In-modal Local Search if in popup mode */}
-                    {!isPage && (
+                    {/* View Mode Toggle: List vs Grid */}
+                    <div className="flex items-center bg-[#0e1621] p-0.5 rounded-lg border border-white/10 shrink-0 shadow-inner ml-1">
+                        <button
+                            type="button"
+                            onClick={() => handleSetViewMode('list')}
+                            className={`p-1.5 rounded-md text-xs font-bold transition-all flex items-center justify-center cursor-pointer ${
+                                viewMode === 'list'
+                                    ? 'bg-blue-600 text-white shadow-md'
+                                    : 'text-gray-400 hover:text-white'
+                            }`}
+                            title="Xem dạng danh sách"
+                        >
+                            <List size={15} />
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => handleSetViewMode('grid')}
+                            className={`p-1.5 rounded-md text-xs font-bold transition-all flex items-center justify-center cursor-pointer ${
+                                viewMode === 'grid'
+                                    ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md ring-1 ring-white/20'
+                                    : 'text-gray-400 hover:text-white'
+                            }`}
+                            title="Xem dạng ô (Grid)"
+                        >
+                            <LayoutGrid size={15} />
+                        </button>
+                    </div>
+                </div>
+
+                {/* In-modal Local Search if in popup mode */}
+                {!isPage && (
+                    <div className="px-3 pb-2 pt-1 bg-[#1c242f] border-b border-white/10 shrink-0">
                         <div className="relative flex items-center">
                             <input
                                 type="text"
                                 value={searchTerm}
                                 onChange={e => setSearchTerm(e.target.value)}
-                                placeholder="🔍 Tìm tên, biệt danh, #id hoặc /condon, /giu, /vip, /coc..."
-                                className="w-full pl-3 pr-8 py-2 bg-[#0e1621] border border-white/20 rounded-xl text-sm text-white focus:outline-none focus:border-blue-500 placeholder-gray-400 font-medium"
+                                placeholder="🔍 Tìm tên, biệt danh, #id hoặc /dangchot, /danggiu, /vip, /coc..."
+                                className="w-full pl-3 pr-8 py-1.5 bg-[#0e1621] border border-white/20 rounded-xl text-xs text-white focus:outline-none focus:border-blue-500 placeholder-gray-400 font-medium"
                             />
                             {searchTerm && (
                                 <button
                                     onClick={() => setSearchTerm('')}
-                                    className="absolute right-2 text-gray-400 hover:text-white text-xs font-bold bg-white/10 rounded-full w-6 h-6 flex items-center justify-center cursor-pointer"
+                                    className="absolute right-2 text-gray-400 hover:text-white text-xs font-bold bg-white/10 rounded-full w-5 h-5 flex items-center justify-center cursor-pointer"
                                 >
                                     ✕
                                 </button>
                             )}
                         </div>
-                    )}
-                </div>
+                    </div>
+                )}
 
                 {/* Customer List Content */}
                 <div 
@@ -3468,7 +3704,7 @@ export function CustomersModal({
                                                 </div>
                                             </div>
 
-                                            {/* Badges: Đã đi hết đơn / Còn đơn / Đang giữ / Giữ > 3 ngày */}
+                                            {/* Badges: Đã đi hết đơn / Đang chốt / Đang giữ / Giữ > 3 ngày */}
                                             <div className="flex flex-wrap gap-1.5 mb-2.5">
                                                 {item.isAllShipped ? (
                                                     <span className="bg-emerald-500/25 border border-emerald-500/50 text-emerald-300 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shadow-xs">
@@ -3476,14 +3712,14 @@ export function CustomersModal({
                                                     </span>
                                                 ) : (
                                                     <>
-                                                        {item.hasActiveOrders && (
+                                                        {item.hasDangChot && (
                                                             <span className="bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shadow-xs">
-                                                                🛍️ Còn đơn ({item.activeItemsCount} món · {item.activeItemsTotal}k)
+                                                                🛍️ Đang chốt ({item.dangChotQty} món · {item.dangChotTotal}k)
                                                             </span>
                                                         )}
-                                                        {item.isHolding && (
+                                                        {item.isHolding && item.dangGiuQty > 0 && (
                                                             <span className="bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shadow-xs">
-                                                                ⏳ Đang giữ {item.holdingCount} món ({item.holdingTotal}k)
+                                                                ⏳ Đang giữ {item.dangGiuQty} món ({item.dangGiuTotal}k)
                                                             </span>
                                                         )}
                                                     </>
@@ -3495,10 +3731,10 @@ export function CustomersModal({
                                                 )}
                                             </div>
 
-                                            {/* Thống kê đơn chốt */}
+                                            {/* Thống kê đơn chốt: Đã chốt = Tổng Đang chốt + Đang giữ */}
                                             <div className="bg-[#0c141f] p-2 rounded-xl border border-white/5 text-[11px] text-gray-400 flex items-center justify-between">
                                                 <div>
-                                                    Đã chốt: <strong className="text-blue-400 font-bold">{item.data.count} cái</strong> ({item.data.total}k)
+                                                    Đã chốt: <strong className="text-blue-400 font-bold">{item.daChotQty} cái</strong> ({item.daChotTotal}k)
                                                 </div>
                                                 {item.sevenDaysRevenue > 0 && (
                                                     <div>
@@ -3562,17 +3798,17 @@ export function CustomersModal({
                                                             ✅ Đã đi hết đơn {item.shippedPancakeOrder ? '#' + item.shippedPancakeOrder.orderNumber : ''}
                                                         </span>
                                                     )}
-                                                    {/* HIỂN THỊ CÒN ĐƠN */}
-                                                    {item.hasActiveOrders && (
+                                                    {/* HIỂN THỊ ĐANG CHỐT (ĐƠN HÔM NAY) */}
+                                                    {item.hasDangChot && (
                                                         <span className="bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shrink-0 shadow-xs">
-                                                            🛍️ Còn đơn ({item.activeItemsCount} món · {item.activeItemsTotal}k)
+                                                            🛍️ Đang chốt ({item.dangChotQty} món · {item.dangChotTotal}k)
                                                         </span>
                                                     )}
 
-                                                    {/* HIỂN THỊ ĐANG GIỮ */}
-                                                    {item.isHolding && (
+                                                    {/* HIỂN THỊ ĐANG GIỮ (CÁC PHIÊN TRƯỚC) */}
+                                                    {item.isHolding && item.dangGiuQty > 0 && (
                                                         <span className="bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shrink-0 shadow-xs">
-                                                            ⏳ Đang giữ {item.holdingCount} món ({item.holdingTotal}k)
+                                                            ⏳ Đang giữ {item.dangGiuQty} món ({item.dangGiuTotal}k)
                                                         </span>
                                                     )}
 
@@ -3584,11 +3820,11 @@ export function CustomersModal({
                                                     )}
                                                 </div>
 
-                                                {/* Subtitle Line: Đã chốt: 0 cái - 0k */}
+                                                {/* Subtitle Line: Đã chốt: TỔNG đang chốt + đang giữ */}
                                                 <div className="text-[12px] text-gray-400 mt-1 flex items-center flex-wrap">
                                                     <span>Đã chốt:</span>
                                                     <span className="font-bold text-blue-400 ml-1.5">
-                                                        {item.data.count} cái <span className="text-gray-500 font-normal mx-0.5">-</span> {item.data.total}k
+                                                        {item.daChotQty} cái <span className="text-gray-500 font-normal mx-0.5">-</span> {item.daChotTotal}k
                                                     </span>
                                                     {item.sevenDaysRevenue > 0 && (
                                                         <span className="text-gray-400 ml-2 font-medium">

@@ -12,6 +12,7 @@
 
 import { parsePancakeContact } from './pancakeDeepLink';
 import { getShortId } from './core';
+import { registerCustomerAvatar } from '../store';
 
 export interface PancakeOrderInfo {
   id: number | string;
@@ -838,12 +839,17 @@ export async function fetchRecentZaloConversations(
     const isNewCustomerNoOrder = !hasShippingTag && !hasOrderSnippet && ordersCount === 0;
     const latestPos = matchedOrders[0];
 
+    const convAvatar = c.from?.avatar_url || c.customers?.[0]?.avatar_url || (fbId ? `https://graph.facebook.com/${fbId}/picture?type=square` : undefined);
+    if (fromName && convAvatar) {
+      registerCustomerAvatar(fromName, convAvatar, isFb ? 'facebook' : undefined);
+    }
+
     allConversations.push({
       id: c.id,
       pageId: pageId,
       pageName: pageName,
       name: fromName,
-      avatarUrl: c.from?.avatar_url || c.customers?.[0]?.avatar_url,
+      avatarUrl: convAvatar,
       customerId: custId,
       fbId,
       snippet: c.snippet || "",
@@ -1888,8 +1894,8 @@ export function checkCustomerPancakeShippedStatus(
     return itTime > (latestPancakeTime + 120000);
   });
 
-  const unshippedCurrentCount = unshippedCurrentItems.length;
-  const unshippedPastCount = unshippedPastItems.length;
+  const unshippedCurrentCount = unshippedCurrentItems.reduce((sum, it) => sum + (it.quantity || 1), 0);
+  const unshippedPastCount = unshippedPastItems.reduce((sum, it) => sum + (it.quantity || 1), 0);
   const totalUnshippedCount = unshippedCurrentCount + unshippedPastCount;
 
   // Khách được coi là "Đã đi hết đơn" nếu:

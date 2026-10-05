@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, memo } from 'react';
 import { Platform, PLATFORMS, normalizeUser } from '../lib/core';
+import { getCustomerAvatar } from '../store';
+import { getAvatarFromMemory, getAvatarFromCache, cacheRemoteAvatar } from '../lib/avatarCache';
 
 interface CustomerAvatarProps {
     user: any;
@@ -65,7 +67,7 @@ export function getTagBorderClass(tag?: string) {
     }
 }
 
-export const CustomerAvatar: React.FC<CustomerAvatarProps> = ({
+export const CustomerAvatar: React.FC<CustomerAvatarProps> = memo(({
     user,
     platform,
     avatarUrl,
@@ -75,7 +77,40 @@ export const CustomerAvatar: React.FC<CustomerAvatarProps> = ({
     className = '',
     onClick
 }) => {
+    const cleanUser = normalizeUser(user);
+    const userKey = cleanUser ? `${platform || 'all'}:${cleanUser}` : '';
+
+    // 1. O(1) Instant Lookup: direct prop or global customer avatar registry (Zero store subscriptions)
+    const effectiveAvatarUrl = avatarUrl || getCustomerAvatar(cleanUser, platform);
+
+    // 2. Tra cứu tức thì từ bộ nhớ đệm Memory Cache (0ms - chống chớp giật 100% khi cuộn)
+    const initialCached = getAvatarFromMemory(effectiveAvatarUrl, cleanUser);
+    const [currentSrc, setCurrentSrc] = useState<string | null>(initialCached || effectiveAvatarUrl || null);
     const [imgError, setImgError] = useState(false);
+
+    // 3. Cập nhật currentSrc tức thì khi props thay đổi
+    useEffect(() => {
+        setImgError(false);
+        const targetUrl = avatarUrl || getCustomerAvatar(cleanUser, platform);
+        const mem = getAvatarFromMemory(targetUrl, cleanUser);
+        if (mem) {
+            setCurrentSrc(mem);
+        } else if (targetUrl) {
+            setCurrentSrc(targetUrl);
+        } else {
+            setCurrentSrc(null);
+        }
+    }, [cleanUser, platform, avatarUrl]);
+
+    const handleImgError = () => {
+        // Nếu URL trực tiếp lỗi (do CORS, hết hạn CDN hoặc chặn hotlink), thử qua avatar proxy
+        if (currentSrc && !currentSrc.startsWith('data:') && !currentSrc.includes('/api/proxy-avatar')) {
+            const proxy = `/api/proxy-avatar?url=${encodeURIComponent(currentSrc)}&name=${encodeURIComponent(cleanUser)}`;
+            setCurrentSrc(proxy);
+        } else {
+            setImgError(true);
+        }
+    };
 
     const sizeClasses = {
         sm: 'w-7 h-7 text-[10px]',
@@ -89,7 +124,7 @@ export const CustomerAvatar: React.FC<CustomerAvatarProps> = ({
     const borderClass = getTagBorderClass(tag);
     const isLarge = size === 'lg' || size === 'xl';
 
-    const hasValidImage = !!avatarUrl && !imgError;
+    const hasValidImage = !!currentSrc && !imgError;
 
     return (
         <div 
@@ -100,11 +135,12 @@ export const CustomerAvatar: React.FC<CustomerAvatarProps> = ({
             <div className={`${sizeClasses} rounded-full overflow-hidden flex items-center justify-center font-black ${borderClass} shadow-md transition-all ${hasValidImage ? 'bg-[#0e1621]' : `${palette.bg} ${palette.text}`}`}>
                 {hasValidImage ? (
                     <img 
-                        src={avatarUrl} 
-                        alt={normalizeUser(user)} 
-                        onError={() => setImgError(true)} 
+                        src={currentSrc!} 
+                        alt={cleanUser} 
+                        onError={handleImgError} 
                         className="w-full h-full object-cover"
                         referrerPolicy="no-referrer"
+                        loading="lazy"
                     />
                 ) : (
                     <span>{initials}</span>
@@ -194,4 +230,4 @@ export const CustomerAvatar: React.FC<CustomerAvatarProps> = ({
             )}
         </div>
     );
-};
+});

@@ -786,6 +786,61 @@ app.post("/api/print/test", async (req, res) => {
   }
 });
 
+// Proxy Avatar Endpoint (CORS bypass & persistent browser caching for TikTok/Zalo/FB avatars)
+app.get("/api/proxy-avatar", async (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+
+  const sendSvgFallback = (nameText: string) => {
+    const raw = (nameText || "KH").trim().replace(/^[#@\s_]+/, "");
+    const initials = (raw.slice(0, 2) || "KH").toUpperCase();
+    const colors = [
+      ["#059669", "#10b981"],
+      ["#2563eb", "#3b82f6"],
+      ["#7c3aed", "#8b5cf6"],
+      ["#d97706", "#f59e0b"],
+      ["#e11d48", "#f43f5e"],
+      ["#0891b2", "#06b6d4"]
+    ];
+    let hash = 0;
+    for (let i = 0; i < raw.length; i++) hash = (hash << 5) - hash + raw.charCodeAt(i);
+    const [c1, c2] = colors[Math.abs(hash) % colors.length];
+
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"><defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="${c1}"/><stop offset="100%" stop-color="${c2}"/></linearGradient></defs><circle cx="64" cy="64" r="64" fill="url(#bg)"/><text x="50%" y="54%" font-family="system-ui, -apple-system, sans-serif" font-weight="900" font-size="44" fill="#ffffff" dominant-baseline="middle" text-anchor="middle">${initials}</text></svg>`;
+    res.setHeader("Content-Type", "image/svg+xml");
+    res.setHeader("Cache-Control", "public, max-age=604800, immutable");
+    return res.send(svg);
+  };
+
+  try {
+    const rawUrl = req.query.url as string;
+    const nameParam = (req.query.name as string || "").trim();
+    if (!rawUrl) return sendSvgFallback(nameParam);
+    const targetUrl = decodeURIComponent(rawUrl);
+    if (!/^https?:\/\//i.test(targetUrl)) return sendSvgFallback(nameParam);
+
+    const resp = await fetch(targetUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Referer": ""
+      },
+      signal: AbortSignal.timeout(6000)
+    });
+
+    if (!resp.ok) {
+      return sendSvgFallback(nameParam);
+    }
+
+    const contentType = resp.headers.get("content-type") || "image/jpeg";
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Cache-Control", "public, max-age=2592000, immutable");
+    const buffer = Buffer.from(await resp.arrayBuffer());
+    return res.send(buffer);
+  } catch {
+    return sendSvgFallback((req.query.name as string) || "KH");
+  }
+});
+
 // ==========================================
 // 🥞 PANCAKE API PROXY & SMART SYNC SERVICE
 // ==========================================

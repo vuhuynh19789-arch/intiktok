@@ -299,7 +299,7 @@ const UserGroupRow = memo(function UserGroupRow({
 
                     {/* Latest Comment Content */}
                     <div 
-                        onClick={() => onOpenPrice(latestC.id, userName, g.platform, extracted.price || latestClosedPriceStr?.replace(/k/g, '') || (!extracted.price && flowPrice?.price ? flowPrice.price : undefined))}
+                        onClick={() => onOpenPrice(latestC.id, userName, g.platform, extracted.price || latestClosedPriceStr?.replace(/k/g, '') || undefined)}
                         className={`text-red-400 font-bold break-words mt-1 cursor-pointer flex items-center gap-1.5 flex-wrap ${isPinned ? 'text-lg' : 'text-sm'}`}
                     >
                         <span>{latestContentStr}</span>
@@ -595,7 +595,7 @@ const CommentRow = memo(function CommentRow({
                     )}
                 </div>
                 <div 
-                    onClick={() => onOpenPrice(c.id, userName, c.platform, extracted.price || closedPriceStr?.replace(/k/g, '') || (!extracted.price && flowPrice?.price ? flowPrice.price : undefined))}
+                    onClick={() => onOpenPrice(c.id, userName, c.platform, extracted.price || closedPriceStr?.replace(/k/g, '') || undefined)}
                     className={`text-red-400 font-bold break-words mt-1 cursor-pointer flex items-center gap-2 flex-wrap ${isPinned ? 'text-lg' : 'text-sm'}`}
                 >
                     <span>{contentStr}</span>
@@ -813,12 +813,11 @@ export const Feed = memo(function Feed({
         return list;
     }, [isTagSearch, keyword, store.tiktok.customers, store.facebook.customers, store.shopee.customers, store.tiktok.tags, store.facebook.tags, store.shopee.tags]);
 
-    // Build regular comments feed
-    const displayList = useMemo(() => {
-        if (isTagSearch) return [];
-
+    // 1. Build base deduplicated comments list (O(N) with Hash Set instead of O(N^2))
+    const baseDeduplicatedComments = useMemo(() => {
         let items: CommentData[] = [];
-        const seenCommentKeys = new Set<string>();
+        const seenIds = new Set<string>();
+        const seenSignatures = new Set<string>();
         const globalClearedAt = getGlobalFeedClearedAt();
 
         (['tiktok', 'facebook', 'shopee'] as Platform[]).forEach(p => {
@@ -846,31 +845,31 @@ export const Feed = memo(function Feed({
                 const cTs = Number(c.ts) || 0;
                 const idStr = c.id ? String(c.id) : '';
 
-                // Chống trùng lặp tuyệt đối: kiểm tra ID hoặc cùng Người dùng + cùng Nội dung trong 25 giây
-                const isDuplicate = items.some(existing => {
-                    if (idStr && existing.id && idStr === String(existing.id)) return true;
-                    const exUser = normalizeUser(existing.user);
-                    const exContent = typeof existing.content === 'object' ? JSON.stringify(existing.content) : String(existing.content || '').trim();
-                    if (exUser.toLowerCase() === cleanUser.toLowerCase() && 
-                        exContent.toLowerCase() === contentStr.toLowerCase()) {
-                        const exTs = Number(existing.ts) || 0;
-                        if (Math.abs(cTs - exTs) <= 25000) {
-                            return true;
-                        }
-                    }
-                    return false;
-                });
+                // O(1) Chống trùng lặp tuyệt đối qua ID và Time-bucket signature
+                if (idStr && seenIds.has(idStr)) return;
 
-                if (!isDuplicate) {
-                    items.push({
-                        ...c,
-                        id: idStr || `c_${cleanUser}_${contentStr.slice(0, 20)}_${cTs}`,
-                        user: cleanUser,
-                        content: contentStr,
-                        platform: safePlatform,
-                        ts: cTs
-                    });
+                const cleanUserNorm = cleanUser.toLowerCase();
+                const contentNorm = contentStr.toLowerCase();
+                const timeBucket = Math.floor(cTs / 25000);
+                const sig1 = `${cleanUserNorm}_${contentNorm}_${timeBucket}`;
+                const sig2 = `${cleanUserNorm}_${contentNorm}_${timeBucket - 1}`;
+                const sig3 = `${cleanUserNorm}_${contentNorm}_${timeBucket + 1}`;
+
+                if (seenSignatures.has(sig1) || seenSignatures.has(sig2) || seenSignatures.has(sig3)) {
+                    return;
                 }
+
+                if (idStr) seenIds.add(idStr);
+                seenSignatures.add(sig1);
+
+                items.push({
+                    ...c,
+                    id: idStr || `c_${cleanUser}_${contentStr.slice(0, 20)}_${cTs}`,
+                    user: cleanUser,
+                    content: contentStr,
+                    platform: safePlatform,
+                    ts: cTs
+                });
             });
         });
 
@@ -883,6 +882,14 @@ export const Feed = memo(function Feed({
 
         // Sort by timestamp descending (newest first)
         items.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+        return items;
+    }, [hostMode, store.tiktok.comments, store.facebook.comments, store.shopee.comments, store.tiktok.tags, store.facebook.tags, store.shopee.tags]);
+
+    // 2. Build filtered and pinned comments feed (Instant <1ms search response)
+    const displayList = useMemo(() => {
+        if (isTagSearch) return [];
+
+        let items = baseDeduplicatedComments;
 
         // Keyword filter
         if (keyword) {
@@ -891,18 +898,19 @@ export const Feed = memo(function Feed({
 
             items = items.filter(c => {
                 const pStore = store[c.platform] || store.tiktok;
-                const cleanUser = normalizeUser(c.user);
-                const nick = pStore.nicknames?.[cleanUser] || '';
-                const shortId = getShortId(cleanUser).toLowerCase();
-                const contentStr = typeof c.content === 'object' ? JSON.stringify(c.content) : String(c.content || '');
+                const userLower = (c as any)._ul || ((c as any)._ul = c.user.toLowerCase());
+                const nick = pStore.nicknames?.[c.user] || '';
+                const nickLower = nick ? ((c as any)._nl || ((c as any)._nl = nick.toLowerCase())) : '';
+                const shortId = (c as any)._sid || ((c as any)._sid = getShortId(c.user).toLowerCase());
+                const contentLower = (c as any)._cl || ((c as any)._cl = (typeof c.content === 'object' ? JSON.stringify(c.content) : String(c.content || '')).toLowerCase());
 
                 if (isIdQuery) {
                     return shortId === targetId || ('#' + shortId) === keyword;
                 }
 
-                return cleanUser.toLowerCase().includes(keyword) || 
-                       contentStr.toLowerCase().includes(keyword) || 
-                       nick.toLowerCase().includes(keyword);
+                return userLower.includes(keyword) || 
+                       contentLower.includes(keyword) || 
+                       (nickLower && nickLower.includes(keyword));
             });
         }
 
@@ -913,7 +921,7 @@ export const Feed = memo(function Feed({
         items.forEach(c => {
             const pStore = store[c.platform] || store.tiktok;
             const pState = pStore.pinned?.[c.id];
-            if (pState && (pState.expiry > now || (pStore.tags && pStore.tags[normalizeUser(c.user)] === 'HOST'))) {
+            if (pState && (pState.expiry > now || (pStore.tags && pStore.tags[c.user] === 'HOST'))) {
                 pinned.push(c);
             } else {
                 normal.push(c);
@@ -921,7 +929,7 @@ export const Feed = memo(function Feed({
         });
 
         return [...pinned, ...normal];
-    }, [isTagSearch, keyword, hostMode, now, store.tiktok.comments, store.facebook.comments, store.shopee.comments, store.tiktok.pinned, store.facebook.pinned, store.shopee.pinned, store.tiktok.tags, store.facebook.tags, store.shopee.tags, store.tiktok.nicknames, store.facebook.nicknames, store.shopee.nicknames]);
+    }, [isTagSearch, keyword, baseDeduplicatedComments, now, store.tiktok.pinned, store.facebook.pinned, store.shopee.pinned, store.tiktok.tags, store.facebook.tags, store.shopee.tags, store.tiktok.nicknames, store.facebook.nicknames, store.shopee.nicknames]);
 
     // Build user-grouped comment list when in Group By User Mode
     const userGroupList = useMemo<UserCommentGroup[]>(() => {
@@ -1035,7 +1043,8 @@ export const Feed = memo(function Feed({
         const contentStr = typeof c.content === 'object' ? JSON.stringify(c.content) : String(c.content || '');
         let extracted = extractPriceFromContent(contentStr);
         if (extracted.price) {
-            store.printNewOrder(c.platform, userName, extracted.content, extracted.price, c.time, c.id);
+            const commentContentToSave = contentStr.trim() || extracted.content;
+            store.printNewOrder(c.platform, userName, commentContentToSave, extracted.price, c.time, c.id);
             if (e) {
                 window.dispatchEvent(new CustomEvent('FLYING_PLUS_ONE', { detail: { x: e.clientX, y: e.clientY, platform: c.platform } }));
             }
@@ -1045,11 +1054,7 @@ export const Feed = memo(function Feed({
                 });
             }, 600);
         } else {
-            // TÍNH NĂNG FLOW GIÁ: Gợi ý nhanh giá từ nick HOST gắn vương miện khi bấm IN
-            const pStore = store[c.platform] || store.tiktok;
-            const flowPriceObj = pStore.flowPrice;
-            const suggestedPrice = flowPriceObj?.price;
-            onOpenPrice(c.id, userName, c.platform, suggestedPrice);
+            onOpenPrice(c.id, userName, c.platform);
             setBusyPrints(prev => {
                 const next = {...prev}; delete next[c.id]; return next;
             });
@@ -1253,30 +1258,6 @@ export const Feed = memo(function Feed({
                     </div>
                 )}
             </div>
-
-            {activeHostFlow && (
-                <div className="sticky top-[41px] z-10 bg-gradient-to-r from-amber-950/90 via-yellow-950/80 to-[#1c242f] border-b border-yellow-500/30 px-3 py-1.5 flex items-center justify-between gap-2 text-xs shadow-md backdrop-blur-xs">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                        <span className="text-yellow-400 font-black text-sm">👑</span>
-                        <span className="text-yellow-300 font-bold whitespace-nowrap">Gợi ý giá từ Host:</span>
-                        <span className="bg-yellow-500 text-black font-mono font-black px-1.5 py-0.5 rounded text-[12px] shadow-sm">
-                            {activeHostFlow.price}k
-                        </span>
-                        <span className="text-gray-300 truncate hidden sm:inline text-[11px]">
-                            (@{activeHostFlow.hostUser}: "{activeHostFlow.content}")
-                        </span>
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                        <button
-                            onClick={() => store.clearFlowPrice(activeHostFlowPlatform)}
-                            title="Tắt flow giá host hiện tại"
-                            className="text-gray-300 hover:text-white px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-[11px] font-semibold cursor-pointer transition-colors"
-                        >
-                            ✕ Tắt
-                        </button>
-                    </div>
-                </div>
-            )}
 
             <div
                     style={{

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { fbGet, fbPut, DEVICE_ID, PLATFORMS, Platform, printLabel, firebaseDb, getShortId, normalizeUser, extractPriceFromContent, addRecentClosedPrice } from './lib/core';
+import { fbGet, fbPut, DEVICE_ID, PLATFORMS, Platform, printLabel, firebaseDb, getShortId, normalizeUser, extractPriceFromContent, addRecentClosedPrice, parsePriceAndQuantity } from './lib/core';
 import { ref, onValue } from 'firebase/database';
 
 export interface OrderItem {
@@ -109,6 +109,8 @@ export interface AppState {
   updateCustomerStats: (platform: Platform, user: string, newCount: number, newTotal: number) => void;
   printNewOrder: (platform: Platform, user: string, content: string, price: number | string, time: string, sourceCommentId: string | null, bypassDebounce?: boolean, skipPrint?: boolean) => void;
   deleteOrderItem: (platform: Platform, user: string, itemIndex: number, isPast?: boolean) => void;
+  updateOrderItemQuantity: (platform: Platform, user: string, itemIndex: number, newQty: number, isPast?: boolean) => void;
+  updateOrderItemPriceAndQuantity: (platform: Platform, user: string, itemIndex: number, newUnitPrice: number, newQty: number, isPast?: boolean) => void;
   toggleCurrentItemShipped: (platform: Platform, user: string, itemIndex: number, forceState?: boolean) => void;
   markCurrentItemsShipped: (platform: Platform, user: string, itemIndices?: number[], shippedState?: boolean) => void;
   archiveShippedCurrentItems: (platform: Platform, user: string) => void;
@@ -183,25 +185,130 @@ const loadLocal = (key: string, def: any = {}) => {
 
 export function deduplicateOrderItems(items: OrderItem[]): OrderItem[] {
     if (!Array.isArray(items) || items.length === 0) return [];
-    const seenIds = new Set<string>();
-    const seenCommentIds = new Set<string>();
+    const idMap = new Map<string, OrderItem>();
+    const commentMap = new Map<string, OrderItem>();
     const unique: OrderItem[] = [];
 
-    for (const item of items) {
-        if (!item) continue;
-        const id = String(item.id || '').trim();
-        const scId = item.sourceCommentId ? String(item.sourceCommentId).trim() : null;
+    for (const rawItem of items) {
+        if (!rawItem) continue;
+        const id = String(rawItem.id || '').trim();
+        const scId = rawItem.sourceCommentId ? String(rawItem.sourceCommentId).trim() : null;
 
-        // Bỏ qua nếu trùng ID đơn hàng
-        if (id && seenIds.has(id)) continue;
-        // Bỏ qua nếu trùng ID bình luận chốt đơn
-        if (scId && seenCommentIds.has(scId)) continue;
+        if (id && idMap.has(id)) continue;
 
-        if (id) seenIds.add(id);
-        if (scId) seenCommentIds.add(scId);
-        unique.push(item);
+        if (scId && commentMap.has(scId)) {
+            // Gộp số lượng nếu phát hiện nhiều dòng cùng sourceCommentId
+            const existing = commentMap.get(scId)!;
+            const unitPrice = existing.unitPrice || (existing.quantity ? Math.round(existing.price / existing.quantity) : existing.price) || rawItem.unitPrice || rawItem.price;
+            const addQty = rawItem.quantity || 1;
+            existing.quantity = (existing.quantity || 1) + addQty;
+            existing.unitPrice = unitPrice;
+            existing.price = unitPrice * existing.quantity;
+            continue;
+        }
+
+        const clone: OrderItem = { 
+            ...rawItem, 
+            quantity: Math.max(1, rawItem.quantity || 1), 
+            unitPrice: rawItem.unitPrice || (rawItem.quantity && rawItem.price ? Math.round(rawItem.price / rawItem.quantity) : rawItem.price)
+        };
+        if (id) idMap.set(id, clone);
+        if (scId) commentMap.set(scId, clone);
+        unique.push(clone);
     }
     return unique;
+}
+
+// ========================================================
+// 👤 PERSISTENT CUSTOMER AVATAR REGISTRY (High-Speed O(1) Lookup)
+// ========================================================
+const AVATAR_STORAGE_KEY = 'slp_webapp_avatars';
+const customerAvatarRegistry = new Map<string, string>();
+
+// Initialize from localStorage if available
+try {
+    const saved = localStorage.getItem(AVATAR_STORAGE_KEY);
+    if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') {
+            Object.entries(parsed).forEach(([k, v]) => {
+                if (typeof v === 'string' && v.trim()) {
+                    customerAvatarRegistry.set(k.toLowerCase(), v.trim());
+                }
+            });
+        }
+    }
+} catch {}
+
+let avatarPersistTimeout: any = null;
+function scheduleAvatarPersist() {
+    if (avatarPersistTimeout) return;
+    avatarPersistTimeout = setTimeout(() => {
+        avatarPersistTimeout = null;
+        try {
+            const obj: Record<string, string> = {};
+            let count = 0;
+            // Store up to 1000 avatars persistently
+            for (const [k, v] of customerAvatarRegistry.entries()) {
+                if (count++ > 1000) break;
+                obj[k] = v;
+            }
+            localStorage.setItem(AVATAR_STORAGE_KEY, JSON.stringify(obj));
+        } catch {}
+    }, 1500);
+}
+
+export function registerCustomerAvatar(rawUser: string, avatarUrl?: string | null, platform?: Platform) {
+    if (!rawUser || !avatarUrl || typeof avatarUrl !== 'string') return;
+    const trimmedUrl = avatarUrl.trim();
+    if (!trimmedUrl) return;
+
+    const clean = normalizeUser(rawUser).toLowerCase();
+    if (!clean) return;
+
+    customerAvatarRegistry.set(clean, trimmedUrl);
+    if (platform) {
+        customerAvatarRegistry.set(`${platform}:${clean}`, trimmedUrl);
+    }
+
+    scheduleAvatarPersist();
+}
+
+export function getCustomerAvatar(rawUser: string, platform?: Platform): string | null {
+    if (!rawUser) return null;
+    const clean = normalizeUser(rawUser).toLowerCase();
+    if (!clean) return null;
+
+    if (platform) {
+        const pUrl = customerAvatarRegistry.get(`${platform}:${clean}`);
+        if (pUrl) return pUrl;
+    }
+    return customerAvatarRegistry.get(clean) || null;
+}
+
+let hasSyncedPancakeAvatars = false;
+export async function syncPancakeAvatarsToRegistry() {
+    if (hasSyncedPancakeAvatars || typeof window === 'undefined') return;
+    hasSyncedPancakeAvatars = true;
+    try {
+        const res = await fetch('/api/pancake/conversations-fast', { signal: AbortSignal.timeout(6000) });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data && Array.isArray(data.conversations)) {
+            data.conversations.forEach((c: any) => {
+                const name = c.from?.name || c.name;
+                const avatar = c.from?.avatar_url || c.avatarUrl || c.customers?.[0]?.avatar_url;
+                if (name && avatar) {
+                    registerCustomerAvatar(name, avatar);
+                }
+            });
+        }
+    } catch {}
+}
+
+// Tự động đồng bộ trước toàn bộ avatar khách hàng từ Pancake ở chế độ ngầm sau khi tải trang
+if (typeof window !== 'undefined') {
+    setTimeout(syncPancakeAvatarsToRegistry, 1200);
 }
 
 // Giữ an toàn tuyệt đối cho giỏ hàng của khách hàng (chỉ xoá/lưu trữ khi người dùng bấm reset phiên thủ công)
@@ -217,7 +324,7 @@ const loadPlatformCustomers = (platform: Platform): Record<string, CustomerData>
         const rawPastItems = Array.isArray(cust.pastItems) ? cust.pastItems : [];
         const items = deduplicateOrderItems(rawItems);
         const pastItems = deduplicateOrderItems(rawPastItems);
-        const count = items.length;
+        const count = items.reduce((sum, it) => sum + (it.quantity || 1), 0);
         const total = items.reduce((sum, it) => sum + (it.price || 0), 0);
 
         cleanCustomers[user] = {
@@ -372,7 +479,7 @@ const decodeKeys = (obj: any) => {
                                 return (now - t) <= sixtyDays;
                             });
 
-                            cd.count = cd.items.length;
+                            cd.count = cd.items.reduce((sum: number, it: any) => sum + (it.quantity || 1), 0);
                             cd.total = cd.items.reduce((sum: number, it: any) => sum + (it.price || 0), 0);
                             merged[user] = cd;
                         }
@@ -451,6 +558,9 @@ const decodeKeys = (obj: any) => {
 
                     if (!isDup) {
                         seenIds.add(idStr);
+                        if (cleanAvatar) {
+                            registerCustomerAvatar(cleanUser, cleanAvatar, platform);
+                        }
                         commentsData.push({
                             ...c,
                             id: idStr,
@@ -1053,32 +1163,66 @@ const decodeKeys = (obj: any) => {
             if (!user) return;
             const state = get()[platform];
             const newCusts = { ...state.customers };
-            const priceNum = parseInt(price as string) || 0;
-            if (priceNum > 0) {
-                addRecentClosedPrice(priceNum);
+
+            // Phân tích chính xác đơn giá, số lượng và tổng tiền (hỗ trợ "99", "99*2", "2*99", "99x2", ...)
+            const { unitPrice, quantity: parsedQty, totalPrice } = parsePriceAndQuantity(price);
+            if (unitPrice > 0) {
+                addRecentClosedPrice(unitPrice);
             }
             if (!newCusts[user]) newCusts[user] = { count: 0, total: 0, lastTime: Date.now(), items: [], pastItems: [] };
             const cust = newCusts[user];
             
             const existingItems = deduplicateOrderItems(cust.items || []);
-            // Tránh chốt trùng lặp đơn hàng có cùng sourceCommentId
-            if (sourceCommentId && existingItems.some(it => it.sourceCommentId === sourceCommentId)) {
-                return;
-            }
 
-            const newItemId = `${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
-            const updatedItems = [...existingItems, {  
-                id: newItemId, 
-                content: (content && content.trim() !== "" && content.trim() !== "(Không ghi chú)") ? content.trim() : "", 
-                price: priceNum, 
-                sourceCommentId, 
-                createdAt: Date.now(), 
-                shipped: false 
-            }];
+            // Kiểm tra xem đơn hàng cho bình luận này đã từng chốt trong giỏ chưa
+            const existingItemIdx = sourceCommentId ? existingItems.findIndex(it => it.sourceCommentId === sourceCommentId) : -1;
+
+            let updatedItems: OrderItem[];
+
+            if (existingItemIdx >= 0) {
+                // Người dùng bấm IN lần thứ 2, 3... trên cùng bình luận -> Tăng số lượng sản phẩm lên đúng số lần bấm in!
+                const existing = existingItems[existingItemIdx];
+                const baseUnitPrice = existing.unitPrice 
+                    || (existing.quantity && existing.price ? Math.round(existing.price / existing.quantity) : existing.price) 
+                    || (unitPrice > 0 ? unitPrice : totalPrice);
+                const addQty = parsedQty > 0 ? parsedQty : 1;
+                const newQty = (existing.quantity || 1) + addQty;
+                const newLineTotal = baseUnitPrice * newQty;
+
+                const updatedItem: OrderItem = {
+                    ...existing,
+                    content: existing.content || (content && content.trim() !== "" && content.trim() !== "(Không ghi chú)" ? content.trim() : ""),
+                    unitPrice: baseUnitPrice,
+                    quantity: newQty,
+                    price: newLineTotal,
+                    shipped: false
+                };
+
+                updatedItems = [...existingItems];
+                updatedItems[existingItemIdx] = updatedItem;
+            } else {
+                // Thêm món mới vào giỏ hàng
+                const newItemId = `${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+                const finalUnitPrice = unitPrice > 0 ? unitPrice : totalPrice;
+                const finalQty = parsedQty > 0 ? parsedQty : 1;
+                const finalLineTotal = totalPrice > 0 ? totalPrice : (finalUnitPrice * finalQty);
+
+                const newItem: OrderItem = {
+                    id: newItemId,
+                    content: (content && content.trim() !== "" && content.trim() !== "(Không ghi chú)") ? content.trim() : "",
+                    unitPrice: finalUnitPrice,
+                    quantity: finalQty,
+                    price: finalLineTotal,
+                    sourceCommentId: sourceCommentId || null,
+                    createdAt: Date.now(),
+                    shipped: false
+                };
+                updatedItems = [...existingItems, newItem];
+            }
 
             newCusts[user] = {
                 ...cust,
-                count: updatedItems.length,
+                count: updatedItems.reduce((sum, it) => sum + (it.quantity || 1), 0),
                 total: updatedItems.reduce((sum, it) => sum + (it.price || 0), 0),
                 lastTime: Date.now(),
                 items: updatedItems
@@ -1123,7 +1267,7 @@ const decodeKeys = (obj: any) => {
 
             newCusts[user] = {
                 ...cust,
-                count: updatedItems.length,
+                count: updatedItems.reduce((sum, it) => sum + (it.quantity || 1), 0),
                 total: updatedItems.reduce((sum, it) => sum + (it.price || 0), 0),
                 lastTime: Date.now(),
                 items: updatedItems
@@ -1178,7 +1322,7 @@ const decodeKeys = (obj: any) => {
 
             newCusts[user] = {
                 ...cust,
-                count: updatedItems.length,
+                count: updatedItems.reduce((sum, it) => sum + (it.quantity || 1), 0),
                 total: updatedItems.reduce((sum, it) => sum + (it.price || 0), 0),
                 lastTime: Date.now(),
                 items: updatedItems
@@ -1270,7 +1414,12 @@ const decodeKeys = (obj: any) => {
             }
             if (!skipPrint) {
                 const nickname = get()[platform].nicknames?.[user];
-                printLabel(nickname ? `${user} (${nickname})` : `#${getShortId(user)} ${user}`, content, price, time, PLATFORMS[platform].label, bypassDebounce);
+                const { unitPrice, quantity, totalPrice } = parsePriceAndQuantity(price);
+                const printPrice = totalPrice > 0 ? totalPrice : (unitPrice > 0 ? unitPrice : (parseInt(String(price)) || 0));
+                const printContent = quantity > 1 
+                    ? (content ? `${content} (${unitPrice}k x ${quantity})` : `(${unitPrice}k x ${quantity})`)
+                    : content;
+                printLabel(nickname ? `${user} (${nickname})` : `#${getShortId(user)} ${user}`, printContent, printPrice, time, PLATFORMS[platform].label, bypassDebounce);
             }
         },
 
@@ -1332,7 +1481,7 @@ const decodeKeys = (obj: any) => {
             const existingPast = cust.pastItems || [];
             newCusts[user] = {
                 ...cust,
-                count: remainingItems.length,
+                count: remainingItems.reduce((sum, it) => sum + (it.quantity || 1), 0),
                 total: remainingItems.reduce((sum, it) => sum + (it.price || 0), 0),
                 lastTime: now,
                 items: remainingItems,
@@ -1403,8 +1552,6 @@ const decodeKeys = (obj: any) => {
             });
             
             // Add to items and update counts
-            let addCount = 0;
-            let addTotal = 0;
             itemsToMerge.forEach(item => {
                 const itemTime = item.createdAt || (item.id ? parseInt(String(item.id).substring(0, 13)) : 0) || Date.now();
                 const d = new Date(itemTime);
@@ -1412,16 +1559,14 @@ const decodeKeys = (obj: any) => {
                 // Gắn thêm ngày vào nội dung nếu chưa có
                 const newContent = item.content.includes(`(${dateStr})`) ? item.content : `${item.content} (${dateStr})`;
                 newItems.push({ ...item, content: newContent, id: Date.now().toString() + Math.random().toString(), createdAt: Date.now() });
-                addCount++;
-                addTotal += (item.price || 0);
             });
             
             newCusts[user] = {
                 ...cust,
                 items: newItems,
                 pastItems: newPastItems,
-                count: cust.count + addCount,
-                total: cust.total + addTotal,
+                count: newItems.reduce((sum, it) => sum + (it.quantity || 1), 0),
+                total: newItems.reduce((sum, it) => sum + (it.price || 0), 0),
                 lastTime: Date.now()
             };
             
@@ -1452,7 +1597,7 @@ const decodeKeys = (obj: any) => {
             localStorage.setItem(`slp_webapp_session_${platform}`, JSON.stringify(newCusts));
             pushData(platform, 'customers', newCusts, now);
         },
-                clearShippedPastItems: (platform, rawUser) => {
+        clearShippedPastItems: (platform, rawUser) => {
             const user = normalizeUser(rawUser);
             if (!user) return;
             const state = get()[platform];
@@ -1514,10 +1659,8 @@ const decodeKeys = (obj: any) => {
                 const newItems = [...(cust.items || [])];
                 newItems.splice(itemIndex, 1);
                 
-                let newCount = cust.count - 1;
-                let newTotal = cust.total - (removed.price || 0);
-                if (newCount < 0) newCount = 0;
-                if (newTotal < 0) newTotal = 0;
+                const newCount = newItems.reduce((sum, it) => sum + (it.quantity || 1), 0);
+                const newTotal = newItems.reduce((sum, it) => sum + (it.price || 0), 0);
                 
                 newCusts[user] = { ...cust, count: newCount, total: newTotal, items: newItems, lastTime: Date.now() };
             }
@@ -1529,6 +1672,100 @@ const decodeKeys = (obj: any) => {
             if (!isPast && removedCommentId) {
                 get().unmarkPrinted(platform, removedCommentId);
             }
+        },
+
+        updateOrderItemQuantity: (platform, rawUser, itemIndex, newQty, isPast = false) => {
+            const user = normalizeUser(rawUser);
+            const state = get()[platform];
+            const newCusts = { ...state.customers };
+            const cust = newCusts[user];
+            if (!cust) return;
+
+            if (isPast) {
+                if (!cust.pastItems || !cust.pastItems[itemIndex]) return;
+                const newPast = [...cust.pastItems];
+                if (newQty <= 0) {
+                    newPast.splice(itemIndex, 1);
+                } else {
+                    const it = newPast[itemIndex];
+                    const unitPrice = it.unitPrice || (it.quantity && it.price ? Math.round(it.price / it.quantity) : it.price);
+                    newPast[itemIndex] = {
+                        ...it,
+                        unitPrice,
+                        quantity: newQty,
+                        price: unitPrice * newQty
+                    };
+                }
+                newCusts[user] = { ...cust, pastItems: newPast, lastTime: Date.now() };
+            } else {
+                if (!cust.items || !cust.items[itemIndex]) return;
+                const newItems = [...cust.items];
+                if (newQty <= 0) {
+                    const removed = newItems[itemIndex];
+                    newItems.splice(itemIndex, 1);
+                    if (removed.sourceCommentId) {
+                        get().unmarkPrinted(platform, removed.sourceCommentId);
+                    }
+                } else {
+                    const it = newItems[itemIndex];
+                    const unitPrice = it.unitPrice || (it.quantity && it.price ? Math.round(it.price / it.quantity) : it.price);
+                    newItems[itemIndex] = {
+                        ...it,
+                        unitPrice,
+                        quantity: newQty,
+                        price: unitPrice * newQty
+                    };
+                }
+                const newCount = newItems.reduce((sum, it) => sum + (it.quantity || 1), 0);
+                const newTotal = newItems.reduce((sum, it) => sum + (it.price || 0), 0);
+                newCusts[user] = { ...cust, count: newCount, total: newTotal, items: newItems, lastTime: Date.now() };
+            }
+
+            const now = Date.now();
+            set(s => ({ [platform]: { ...s[platform], customers: newCusts, lastCustomersAt: now } }));
+            localStorage.setItem(`slp_webapp_session_${platform}`, JSON.stringify(newCusts));
+            pushData(platform, 'customers', newCusts, now);
+        },
+
+        updateOrderItemPriceAndQuantity: (platform, rawUser, itemIndex, newUnitPrice, newQty, isPast = false) => {
+            const user = normalizeUser(rawUser);
+            const state = get()[platform];
+            const newCusts = { ...state.customers };
+            const cust = newCusts[user];
+            if (!cust) return;
+
+            const unitPrice = Math.max(0, newUnitPrice);
+            const qty = Math.max(1, newQty);
+            const totalLinePrice = unitPrice * qty;
+
+            if (isPast) {
+                if (!cust.pastItems || !cust.pastItems[itemIndex]) return;
+                const newPast = [...cust.pastItems];
+                newPast[itemIndex] = {
+                    ...newPast[itemIndex],
+                    unitPrice,
+                    quantity: qty,
+                    price: totalLinePrice
+                };
+                newCusts[user] = { ...cust, pastItems: newPast, lastTime: Date.now() };
+            } else {
+                if (!cust.items || !cust.items[itemIndex]) return;
+                const newItems = [...cust.items];
+                newItems[itemIndex] = {
+                    ...newItems[itemIndex],
+                    unitPrice,
+                    quantity: qty,
+                    price: totalLinePrice
+                };
+                const newCount = newItems.reduce((sum, it) => sum + (it.quantity || 1), 0);
+                const newTotal = newItems.reduce((sum, it) => sum + (it.price || 0), 0);
+                newCusts[user] = { ...cust, count: newCount, total: newTotal, items: newItems, lastTime: Date.now() };
+            }
+
+            const now = Date.now();
+            set(s => ({ [platform]: { ...s[platform], customers: newCusts, lastCustomersAt: now } }));
+            localStorage.setItem(`slp_webapp_session_${platform}`, JSON.stringify(newCusts));
+            pushData(platform, 'customers', newCusts, now);
         },
 
         resetSession: () => {
@@ -1699,6 +1936,9 @@ const decodeKeys = (obj: any) => {
             );
             if (isDuplicate) return;
             const cleanAvatar = comment.avatar || (typeof comment.user === 'object' && ((comment.user as any).profilePictureUrl || (comment.user as any).avatarThumb?.urlList?.[0])) || '';
+            if (cleanAvatar) {
+                registerCustomerAvatar(cleanUser, cleanAvatar, platform);
+            }
             const normalizedComment: CommentData = {
                 ...comment,
                 user: cleanUser,

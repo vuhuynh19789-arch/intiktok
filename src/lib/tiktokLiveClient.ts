@@ -1,4 +1,4 @@
-import { useStore, CommentData } from '../store';
+import { useStore, CommentData, registerCustomerAvatar } from '../store';
 import { DEVICE_ID, firebaseDb, normalizeUser } from './core';
 import { ref, onValue, set as fbSet } from 'firebase/database';
 
@@ -384,6 +384,9 @@ export async function fetchTikTokStatus(): Promise<TikTokLiveStatus> {
             const cleanContent = typeof rawContent === 'object' ? JSON.stringify(rawContent) : String(rawContent || '');
             const cleanAvatar = item.avatar || (typeof item.user === 'object' && ((item.user as any).profilePictureUrl || (item.user as any).avatarThumb?.urlList?.[0])) || '';
             const rawId = item.id ? String(item.id) : `tt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+            if (cleanAvatar) {
+              registerCustomerAvatar(cleanUser, cleanAvatar, 'tiktok');
+            }
             if (!seenIds.has(rawId)) {
               seenIds.add(rawId);
               incoming.push({
@@ -1016,6 +1019,9 @@ try {
         if (effectiveClearedAt > 0 && itemTs <= effectiveClearedAt) return;
 
         const rawId = item.id ? String(item.id) : `tt_direct_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+        if (cleanAvatar) {
+          registerCustomerAvatar(cleanUser, cleanAvatar, 'tiktok');
+        }
         const comment: CommentData = {
           id: rawId,
           user: cleanUser,
@@ -1066,6 +1072,9 @@ window.addEventListener('storage', (e) => {
         const effectiveClearedAt = Number(localStorage.getItem('slp_feed_cleared_at_tiktok')) || 0;
         if (effectiveClearedAt > 0 && itemTs <= effectiveClearedAt) return;
 
+        if (cleanAvatar) {
+          registerCustomerAvatar(cleanUser, cleanAvatar, 'tiktok');
+        }
         const rawId = item.id ? String(item.id) : `tt_direct_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
         const comment: CommentData = {
           id: rawId,

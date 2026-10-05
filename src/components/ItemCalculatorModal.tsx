@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Calculator, Tag, Printer, Plus } from 'lucide-react';
 import { useStore } from '../store';
 import { Platform, PLATFORMS, getShortId, normalizeUser, getLastClosedPrice, getRecentSearchPrices } from '../lib/core';
@@ -121,20 +121,35 @@ export function ItemCalculatorModal({
     const lastClosed = getLastClosedPrice();
     const searchPrices = getRecentSearchPrices();
 
-    const initialPriceStr = defaultPrice 
-        || (flowPrice?.price ? flowPrice.price : '') 
-        || (lastClosed ? String(lastClosed) : '')
-        || (searchPrices.length > 0 ? searchPrices[0] : '');
+    // Mặc định mở bảng tính lên là nhảy giá 0₫ (trừ khi có truyền defaultPrice cụ thể)
+    const initialPriceStr = defaultPrice || '';
 
-    const [formula, setFormula] = useState<string>(initialPriceStr || '');
+    const [formula, setFormula] = useState<string>(initialPriceStr);
     const [content, setContent] = useState(defaultContent || '');
-    const [printNow, setPrintNow] = useState<boolean>(true);
+    const [printNow, setPrintNow] = useState<boolean>(false);
+    const formulaContainerRef = useRef<HTMLDivElement>(null);
 
     const cust = store[platform].customers[cleanUser];
 
     const parsedResult = useMemo(() => {
         return parseOrderFormula(formula, content.trim());
     }, [formula, content]);
+
+    // Tự động cuộn sang phải cùng để luôn nhìn thấy số vừa nhập cuối cùng của phép tính dài
+    useEffect(() => {
+        const scrollToRight = () => {
+            if (formulaContainerRef.current) {
+                formulaContainerRef.current.scrollLeft = formulaContainerRef.current.scrollWidth + 2000;
+            }
+        };
+        scrollToRight();
+        const rAF = requestAnimationFrame(scrollToRight);
+        const timer = setTimeout(scrollToRight, 50);
+        return () => {
+            cancelAnimationFrame(rAF);
+            clearTimeout(timer);
+        };
+    }, [formula]);
 
     // Haptic feedback helper for ultra-responsive mobile feel
     const triggerHaptic = (ms: number = 12) => {
@@ -256,7 +271,6 @@ export function ItemCalculatorModal({
 
     const quickItemTags = ['Áo', 'Quần', 'Đầm / Váy', 'Set bộ', 'Áo khoác', 'Quà tặng', 'Phụ kiện', 'Túi xách'];
     const quickPrices = [
-        flowPrice?.price ? { label: `👑 Host ${flowPrice.price}k`, val: flowPrice.price } : null,
         lastClosed ? { label: `⚡ Chốt ${lastClosed}k`, val: String(lastClosed) } : null,
         ...searchPrices.map(sp => ({ label: `🔍 ${sp}k`, val: sp })),
         { label: '35k', val: '35' },
@@ -271,7 +285,14 @@ export function ItemCalculatorModal({
     ].filter(Boolean) as { label: string, val: string }[];
 
     return (
-        <div className="fixed inset-0 bg-black/85 z-[130] flex items-center justify-center p-1.5 sm:p-4 backdrop-blur-xs select-none">
+        <div 
+            className="fixed inset-0 bg-black/85 z-[130] flex items-center justify-center p-1.5 sm:p-4 backdrop-blur-xs select-none"
+            onClick={(e) => {
+                if (e.target === e.currentTarget) {
+                    onClose();
+                }
+            }}
+        >
             <div className="bg-[#0f1724] rounded-3xl w-full max-w-md flex flex-col overflow-hidden shadow-2xl border-2 border-cyan-500/40 animate-in fade-in zoom-in-95">
                 {/* Header */}
                 <div className={`p-3 bg-gradient-to-r ${PLATFORMS[platform].bgClass || 'from-blue-600 to-indigo-700'} text-white flex items-center justify-between shadow-md`}>
@@ -367,42 +388,51 @@ export function ItemCalculatorModal({
 
                         {/* Màn hình hiển thị Công thức */}
                         <div className="relative bg-[#02060c] rounded-xl border border-cyan-500/40 p-2.5 min-h-[52px] flex flex-col justify-center shadow-inner">
-                            <div className="flex items-center justify-between gap-2 overflow-x-auto hide-scrollbar">
+                            <div className="flex items-center justify-between gap-2">
                                 {formula ? (
                                     <button
                                         type="button"
-                                        onPointerDown={() => {
+                                        onPointerDown={(e) => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
                                             triggerHaptic(15);
                                             setFormula('');
                                         }}
-                                        className="w-6 h-6 rounded-md bg-red-950/60 hover:bg-red-900/80 text-red-300 flex items-center justify-center text-xs font-bold shrink-0 cursor-pointer active:scale-90"
+                                        className="w-6 h-6 rounded-md bg-red-950/70 hover:bg-red-900 border border-red-500/40 text-red-300 flex items-center justify-center text-xs font-bold shrink-0 cursor-pointer active:scale-90 transition-transform"
+                                        title="Xóa phép tính"
                                     >
                                         ✕
                                     </button>
                                 ) : (
-                                    <span className="text-[11px] text-gray-500 italic">Bấm phím số bên dưới...</span>
+                                    <span className="text-[11px] text-gray-500 italic shrink-0">Bấm phím số bên dưới...</span>
                                 )}
 
-                                <div className="font-mono font-black text-2xl sm:text-3xl text-cyan-300 tracking-wider text-right flex-1 truncate">
-                                    {formula || '0'}
+                                <div 
+                                    ref={formulaContainerRef}
+                                    className="flex-1 min-w-0 overflow-x-auto whitespace-nowrap hide-scrollbar py-0.5 select-text"
+                                    style={{ touchAction: 'pan-x', WebkitOverflowScrolling: 'touch' }}
+                                >
+                                    <div className="font-mono font-black text-2xl sm:text-3xl text-cyan-300 tracking-wider inline-flex min-w-full justify-end px-1">
+                                        {formula || '0'}
+                                    </div>
                                 </div>
                             </div>
                         </div>
 
                         {/* Bóc tách kết quả trực tiếp */}
                         <div className="pt-1.5 border-t border-white/10 flex items-center justify-between px-0.5">
-                            <div className="flex items-center gap-1.5">
-                                <span className="bg-cyan-950/90 text-cyan-300 border border-cyan-600/50 px-2 py-0.5 rounded-lg text-xs font-black font-mono shadow-xs">
+                            <div className="flex items-center gap-1.5 min-w-0 flex-1 mr-2">
+                                <span className="bg-cyan-950/90 text-cyan-300 border border-cyan-600/50 px-2 py-0.5 rounded-lg text-xs font-black font-mono shadow-xs shrink-0">
                                     📦 {parsedResult.totalQty} món
                                 </span>
                                 {parsedResult.items.length > 1 && (
-                                    <span className="text-[10px] text-gray-400 truncate max-w-[130px] font-mono">
+                                    <div className="text-[10px] text-gray-400 overflow-x-auto whitespace-nowrap hide-scrollbar font-mono flex-1 min-w-0">
                                         ({parsedResult.items.map(it => `${it.quantity}x${it.unitPrice}k`).join('+')})
-                                    </span>
+                                    </div>
                                 )}
                             </div>
 
-                            <div className="text-right">
+                            <div className="text-right shrink-0">
                                 <div className="text-lg sm:text-xl font-black text-emerald-400 font-mono leading-none">
                                     = {parsedResult.grandTotalK}k
                                 </div>
@@ -451,27 +481,27 @@ export function ItemCalculatorModal({
                             {[
                                 { k: 'C', label: 'C', sub: 'Xóa', cls: 'bg-red-950/70 text-red-300 hover:bg-red-900 border-red-500/40 text-lg font-black' },
                                 { k: '⌫', label: '⌫', sub: 'Lùi', cls: 'bg-slate-800 text-gray-200 hover:bg-slate-700 text-lg font-black' },
-                                { k: '*', label: '×', sub: 'Nhân SL', cls: 'bg-indigo-900/80 text-indigo-200 hover:bg-indigo-800 border-indigo-500/50 text-2xl font-black' },
-                                { k: '+', label: '+', sub: 'Cộng', cls: 'bg-indigo-900/80 text-indigo-200 hover:bg-indigo-800 border-indigo-500/50 text-2xl font-black' },
+                                { k: quickPrices[1]?.val || '89', label: `+${quickPrices[1]?.label || '89k'}`, sub: 'Giá nhanh', isPreset: true, cls: 'bg-emerald-950/80 text-emerald-300 hover:bg-emerald-900 border-emerald-500/40 font-black text-sm' },
+                                { k: quickPrices[2]?.val || '35', label: `+${quickPrices[2]?.label || '35k'}`, sub: 'Giá nhanh', isPreset: true, cls: 'bg-emerald-950/80 text-emerald-300 hover:bg-emerald-900 border-emerald-500/40 font-black text-sm' },
 
                                 { k: '7', label: '7', cls: 'bg-[#162130] text-white hover:bg-[#203046] text-xl font-black' },
                                 { k: '8', label: '8', cls: 'bg-[#162130] text-white hover:bg-[#203046] text-xl font-black' },
                                 { k: '9', label: '9', cls: 'bg-[#162130] text-white hover:bg-[#203046] text-xl font-black' },
-                                { k: '39', label: '+39k', sub: 'Giá 39', cls: 'bg-emerald-950/80 text-emerald-300 hover:bg-emerald-900 border-emerald-500/40 font-black text-sm' },
+                                { k: quickPrices[0]?.val || '39', label: `+${quickPrices[0]?.label || '39k'}`, sub: 'Giá nhanh', isPreset: true, cls: 'bg-emerald-950/80 text-emerald-300 hover:bg-emerald-900 border-emerald-500/40 font-black text-sm' },
 
                                 { k: '4', label: '4', cls: 'bg-[#162130] text-white hover:bg-[#203046] text-xl font-black' },
                                 { k: '5', label: '5', cls: 'bg-[#162130] text-white hover:bg-[#203046] text-xl font-black' },
                                 { k: '6', label: '6', cls: 'bg-[#162130] text-white hover:bg-[#203046] text-xl font-black' },
-                                { k: '89', label: '+89k', sub: 'Giá 89', cls: 'bg-emerald-950/80 text-emerald-300 hover:bg-emerald-900 border-emerald-500/40 font-black text-sm' },
+                                { k: '*', label: '×', sub: 'Nhân SL', cls: 'bg-indigo-900/80 text-indigo-200 hover:bg-indigo-800 border-indigo-500/50 text-2xl font-black' },
 
                                 { k: '1', label: '1', cls: 'bg-[#162130] text-white hover:bg-[#203046] text-xl font-black' },
                                 { k: '2', label: '2', cls: 'bg-[#162130] text-white hover:bg-[#203046] text-xl font-black' },
                                 { k: '3', label: '3', cls: 'bg-[#162130] text-white hover:bg-[#203046] text-xl font-black' },
-                                { k: '35', label: '+35k', sub: 'Giá 35', cls: 'bg-emerald-950/80 text-emerald-300 hover:bg-emerald-900 border-emerald-500/40 font-black text-sm' },
+                                { k: '+', label: '+', sub: 'Cộng', cls: 'bg-indigo-900/80 text-indigo-200 hover:bg-indigo-800 border-indigo-500/50 text-2xl font-black' },
 
                                 { k: '0', label: '0', cls: 'bg-[#162130] text-white hover:bg-[#203046] text-xl font-black' },
                                 { k: '000', label: '000', cls: 'bg-[#1a293c] text-cyan-300 hover:bg-[#233750] text-sm font-black' },
-                                { k: '50', label: '+50k', sub: 'Giá 50', cls: 'bg-emerald-950/80 text-emerald-300 hover:bg-emerald-900 border-emerald-500/40 font-black text-sm' },
+                                { k: quickPrices[3]?.val || '50', label: `+${quickPrices[3]?.label || '50k'}`, sub: 'Giá nhanh', isPreset: true, cls: 'bg-emerald-950/80 text-emerald-300 hover:bg-emerald-900 border-emerald-500/40 font-black text-sm' },
                                 { k: '=', label: '= THÊM', sub: 'Chốt', cls: 'bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-500 text-white font-black text-xs sm:text-sm shadow-md shadow-emerald-950' },
                             ].map((btn, idx) => (
                                 <button
@@ -479,7 +509,7 @@ export function ItemCalculatorModal({
                                     type="button"
                                     onPointerDown={(e) => {
                                         e.preventDefault();
-                                        if (btn.k === '39' || btn.k === '89' || btn.k === '35' || btn.k === '50') {
+                                        if (btn.isPreset) {
                                             handleAppendPreset(btn.k);
                                         } else {
                                             handleNumpadKey(btn.k);

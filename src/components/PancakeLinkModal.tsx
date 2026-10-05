@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { ExternalLink, Smartphone, Check, Trash2, X, Clipboard, Search, RefreshCw, MessageSquare, Copy, Sparkles, AlertCircle, Clock, Phone, MapPin } from 'lucide-react';
-import { useStore } from '../store';
+import { useStore, getCustomerAvatar } from '../store';
 import { Platform, PLATFORMS, getShortId, normalizeUser } from '../lib/core';
 import { openPancakeApp } from '../lib/pancakeDeepLink';
 import { CustomerAvatar } from './UserAvatar';
@@ -45,8 +45,7 @@ export const PancakeLinkModal: React.FC<PancakeLinkModalProps> = ({
 
     const nickname = store[platform].nicknames?.[cleanUser] || '';
     const tag = store[platform].tags?.[cleanUser] || 'NORMAL';
-    const commentWithAvatar = store[platform].comments.find(c => normalizeUser(c.user) === cleanUser && c.avatar);
-    const avatarUrl = commentWithAvatar?.avatar;
+    const avatarUrl = getCustomerAvatar(cleanUser, platform) || undefined;
     const insight = getCustomerInsight(cleanUser);
 
     const loadConversations = async () => {

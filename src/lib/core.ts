@@ -45,7 +45,65 @@ export async function fbPut(path: string, body: any) {
     return await res.json();
 }
 
+export function parsePriceAndQuantity(priceInput: number | string): { unitPrice: number; quantity: number; totalPrice: number } {
+    if (typeof priceInput === 'number') {
+        const p = Math.max(0, Math.round(priceInput));
+        return { unitPrice: p, quantity: 1, totalPrice: p };
+    }
+    const str = String(priceInput || '').trim();
+    if (!str) return { unitPrice: 0, quantity: 1, totalPrice: 0 };
+
+    // Hỗ trợ định dạng nhân SL: "99*2", "2*99", "99x2", "2 x 99", "99×2"
+    const mulMatch = str.match(/^(\d+(?:\.\d+)?)\s*(?:k|ka|ca|cành)?\s*[*xX×]\s*(\d+(?:\.\d+)?)\s*(?:k|ka|ca|cành)?$/i);
+    if (mulMatch) {
+        let n1 = parseFloat(mulMatch[1]);
+        let n2 = parseFloat(mulMatch[2]);
+        let unitPrice = n1;
+        let qty = n2;
+        if (n1 < 10 && n2 >= 10 && Number.isInteger(n1)) {
+            unitPrice = n2;
+            qty = n1;
+        }
+        const roundedPrice = Math.round(unitPrice);
+        const roundedQty = Math.max(1, Math.round(qty));
+        return {
+            unitPrice: roundedPrice,
+            quantity: roundedQty,
+            totalPrice: roundedPrice * roundedQty
+        };
+    }
+
+    const num = parseFloat(str.replace(/k|ka|ca|cành/gi, '').trim()) || 0;
+    const rounded = Math.round(num);
+    return { unitPrice: rounded, quantity: 1, totalPrice: rounded };
+}
+
 export function extractPriceFromContent(text: string) {
+    if (!text || typeof text !== 'string') return { price: "", content: "" };
+
+    // 1. Ưu tiên bóc tách công thức nhân: "99*2", "áo 99*2", "2*99", "99x2", "99 x 2"
+    const mulRegex = /(?:^|\s)(\d+)\s*(?:k|ka|ca|cành)?\s*[*xX×]\s*(\d+)\s*(?:k|ka|ca|cành)?(?:\s|$)/i;
+    const mulMatch = text.match(mulRegex);
+    if (mulMatch) {
+        let n1 = parseInt(mulMatch[1], 10);
+        let n2 = parseInt(mulMatch[2], 10);
+        if (n1 > 0 && n2 > 0) {
+            let unitPrice = n1;
+            let qty = n2;
+            if (n1 < 10 && n2 >= 10) {
+                unitPrice = n2;
+                qty = n1;
+            }
+            if (unitPrice >= 10) {
+                const fullFormula = `${unitPrice}*${qty}`;
+                const matchedRaw = mulMatch[0].trim();
+                const lastIdx = text.lastIndexOf(matchedRaw);
+                const content = (text.substring(0, lastIdx) + " " + text.substring(lastIdx + matchedRaw.length)).replace(/\s+/g, ' ').trim();
+                return { price: fullFormula, content: content || text };
+            }
+        }
+    }
+
     let pureNumMatch = text.match(/^(\d+)\s*(k|ka|ca|cành)?$/i);
     if (pureNumMatch) {
         if (parseInt(pureNumMatch[1], 10) >= 10) return { price: pureNumMatch[1], content: text };
@@ -75,6 +133,15 @@ export function extractPriceFromContent(text: string) {
     }
     
     return { price: "", content: text };
+}
+
+export function removeVietnameseAccents(str: string): string {
+    if (!str) return "";
+    return str
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/đ/g, "d")
+        .replace(/Đ/g, "D");
 }
 
 export function getRecentSearchPrices(): string[] {

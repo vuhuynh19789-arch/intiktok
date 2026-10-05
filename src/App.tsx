@@ -1,9 +1,10 @@
 import { PWAInstallButton } from './components/PWAInstallButton';
 import PrintServer from "./components/PrintServer";
-import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
+import React, { useEffect, useState, useMemo, useRef, useCallback, useDeferredValue } from 'react';
 import { MoreVertical, Search as SearchIcon, Home, MessageSquare, Users, PlusCircle, Maximize, Trash2, RefreshCw, Bot, ShoppingCart, BarChart3, Radio, Tv } from 'lucide-react';
-import { useStore } from './store';
-import { PLATFORMS, Platform, getShortId, normalizeUser, addRecentSearchPrice, extractPriceFromContent } from './lib/core';
+import { useStore, getCustomerAvatar } from './store';
+import { PLATFORMS, Platform, getShortId, normalizeUser, addRecentSearchPrice, extractPriceFromContent, removeVietnameseAccents } from './lib/core';
+import { SearchBar } from './components/SearchBar';
 import { PriceModal, ManualModal, ListModal, ProfileModal, CustomersModal, LiveEfficiencyModal } from './components/Modals';
 import { MinigameModal } from './components/Minigame';
 import { AutoCommentModal, useAutoComment } from './components/AutoComment';
@@ -58,10 +59,8 @@ export default function App() {
   const scrollTimeoutRef = useRef<any>(null);
   const scrollRafRef = useRef<number | null>(null);
   const [activeTab, setActiveTab] = useState(0);
-  const [isSearchVisible, setIsSearchVisible] = useState(true);
   const [isNavVisible, setIsNavVisible] = useState(true);
   const navTimerRef = useRef<any>(null);
-  const searchTimerRef = useRef<any>(null);
   const [showMenu, setShowMenu] = useState(false);
   const [showSmartLiveMonitor, setShowSmartLiveMonitor] = useState(false);
   const [liveModalSource, setLiveModalSource] = useState<'direct' | 'monitor'>('direct');
@@ -82,18 +81,7 @@ export default function App() {
       }, 5000);
   }, []);
 
-  // Auto-hide search bar after 5 seconds of inactivity/appearance
-  const resetSearchTimer = useCallback(() => {
-      if (searchTimerRef.current) {
-          clearTimeout(searchTimerRef.current);
-      }
-      setIsSearchVisible(true);
-      searchTimerRef.current = setTimeout(() => {
-          setIsSearchVisible(false);
-      }, 5000);
-  }, []);
-
-  // Luôn mặc định mở web lên là tab Home (Chat) và kích hoạt timer 5s tự ẩn cho cả navigation & search bar
+  // Luôn mặc định mở web lên là tab Home (Chat)
   useEffect(() => {
       setActiveTab(0);
       if (scrollContainerRef.current) {
@@ -105,7 +93,6 @@ export default function App() {
           }
       }, 50);
       resetNavTimer();
-      resetSearchTimer();
 
       // Initialize TikTok Live stream & distributed master coordinator
       startDistributedMasterCoordinator();
@@ -122,24 +109,13 @@ export default function App() {
           unsubTikTok();
           unsubFacebook();
           if (navTimerRef.current) clearTimeout(navTimerRef.current);
-          if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
       };
-  }, [resetNavTimer, resetSearchTimer]);
+  }, [resetNavTimer]);
 
-  // Unified scroll direction callback:
-  // - Lướt xuống (isDown = true): hiện lại navigation (hẹn giờ 5s tự ẩn), tự động ẩn thanh tìm kiếm
-  // - Lướt lên (isDown = false): hiện lại thanh tìm kiếm (hẹn giờ 5s tự ẩn)
+  // Unified scroll direction callback
   const handleContentScroll = useCallback((isDown: boolean) => {
-      if (isDown) {
-          resetNavTimer();
-          if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-          if (!isSearchFocused && !search) {
-              setIsSearchVisible(false);
-          }
-      } else {
-          resetSearchTimer();
-      }
-  }, [resetNavTimer, resetSearchTimer, isSearchFocused, search]);
+      resetNavTimer();
+  }, [resetNavTimer]);
 
   // Optimized smooth scrolling without scroll-snap fighting
   const goToTab = useCallback((index: number) => {
@@ -320,23 +296,69 @@ export default function App() {
   (['tiktok', 'facebook', 'shopee'] as Platform[]).forEach(p => {
     const custs = store[p].customers as Record<string, any>;
     Object.values(custs).forEach(c => {
-        platformStats[p].c += c.count || 0;
+        const custQty = (c.items && c.items.length > 0)
+            ? c.items.reduce((s: number, it: any) => s + (it.quantity || 1), 0)
+            : (c.count || 0);
+        platformStats[p].c += custQty;
         platformStats[p].r += c.total || 0;
     });
     totalCount += platformStats[p].c;
     totalRevenue += platformStats[p].r;
   });
 
+  const allCustomersIndex = useMemo(() => {
+      const list: Array<{
+          user: string;
+          cleanUser: string;
+          userLower: string;
+          userNoAccent: string;
+          nick: string;
+          nickLower: string;
+          nickNoAccent: string;
+          shortId: string;
+          platform: Platform;
+          data: any;
+          tag: string;
+          lastTime: number;
+      }> = [];
+
+      (['tiktok', 'facebook', 'shopee'] as Platform[]).forEach(p => {
+          const pStore = store[p];
+          if (!pStore || !pStore.customers) return;
+          Object.entries(pStore.customers as Record<string, any>).forEach(([user, data]) => {
+              const clean = normalizeUser(user);
+              const nick = pStore.nicknames?.[user] || '';
+              list.push({
+                  user,
+                  cleanUser: clean,
+                  userLower: user.toLowerCase(),
+                  userNoAccent: removeVietnameseAccents(user).toLowerCase(),
+                  nick,
+                  nickLower: nick.toLowerCase(),
+                  nickNoAccent: removeVietnameseAccents(nick).toLowerCase(),
+                  shortId: getShortId(user).toLowerCase(),
+                  platform: p,
+                  data,
+                  tag: pStore.tags?.[user] || 'NORMAL',
+                  lastTime: (data as any)?.lastTime || 0
+              });
+          });
+      });
+      return list;
+  }, [store.tiktok.customers, store.facebook.customers, store.shopee.customers, store.tiktok.nicknames, store.facebook.nicknames, store.shopee.nicknames, store.tiktok.tags, store.facebook.tags, store.shopee.tags]);
+
   const quickResults = useMemo(() => {
-      const keyword = search.trim().toLowerCase();
+      const rawKw = search.trim();
+      const keyword = rawKw.toLowerCase();
       const isDefault = !keyword && isSearchFocused;
       if (!keyword && !isSearchFocused) return { items: [], title: '' };
 
+      const kwNoAccent = removeVietnameseAccents(keyword);
       let matches: any[] = [];
       let platformsToSearch: Platform[] = ['tiktok', 'facebook', 'shopee'];
       let topCount = 10;
       let isCommand = false;
-      let title = `👤 Khách đã chốt khớp "${search}"`;
+      let title = `👤 Khách đã chốt khớp "${rawKw}"`;
 
       if (keyword === '/top10' || isDefault) {
           isCommand = true;
@@ -359,37 +381,39 @@ export default function App() {
           title = "👤 Top 10 khách chốt sàn Facebook";
       }
 
-      platformsToSearch.forEach(p => {
-          Object.entries(store[p].customers as Record<string, any>).forEach(([user, data]) => {
-              const tag = store[p].tags?.[user] || 'NORMAL';
-              if (isDefault || isCommand) {
-                  matches.push({ user, platform: p, data, tag });
-              } else {
-                  const nick = store[p].nicknames?.[user] || '';
-                  const shortId = getShortId(user).toLowerCase();
-                  const isIdSearch = keyword.startsWith('#') || /^\d+$/.test(keyword);
+      const isIdSearch = keyword.startsWith('#') || /^\d+$/.test(keyword);
+      const cleanId = keyword.startsWith('#') ? keyword.slice(1) : keyword;
 
-                  if (isIdSearch) {
-                      const cleanKw = keyword.startsWith('#') ? keyword.slice(1) : keyword;
-                      if (shortId === cleanKw || ('#' + shortId) === keyword) {
-                          matches.push({ user, platform: p, data, tag });
-                      }
-                  } else if (
-                      user.toLowerCase().includes(keyword) || 
-                      nick.toLowerCase().includes(keyword)
-                  ) {
-                      matches.push({ user, platform: p, data, tag });
-                  }
+      for (const item of allCustomersIndex) {
+          if (!platformsToSearch.includes(item.platform)) continue;
+
+          if (isDefault || isCommand) {
+              matches.push(item);
+          } else if (isIdSearch) {
+              if (item.shortId === cleanId || ('#' + item.shortId) === keyword) {
+                  matches.push(item);
               }
-          });
-      });
-
-      if (isDefault || isCommand) {
-          matches.sort((a,b) => (b.data.lastTime || 0) - (a.data.lastTime || 0));
-          matches = matches.slice(0, topCount);
+          } else {
+              if (
+                  item.userLower.includes(keyword) ||
+                  item.userNoAccent.includes(kwNoAccent) ||
+                  item.nickLower.includes(keyword) ||
+                  item.nickNoAccent.includes(kwNoAccent)
+              ) {
+                  matches.push(item);
+              }
+          }
       }
+
+      matches.sort((a, b) => (b.lastTime || 0) - (a.lastTime || 0));
+      if (isDefault || isCommand) {
+          matches = matches.slice(0, topCount);
+      } else {
+          matches = matches.slice(0, 25);
+      }
+
       return { items: matches, title };
-  }, [search, isSearchFocused, store.tiktok.customers, store.facebook.customers, store.shopee.customers, store.tiktok.nicknames, store.facebook.nicknames, store.shopee.nicknames, store.tiktok.tags, store.facebook.tags, store.shopee.tags]);
+  }, [search, isSearchFocused, allCustomersIndex]);
 
   return (
     <div className="max-w-[720px] mx-auto bg-[#0e1621] flex flex-col relative overflow-hidden" style={{ height: windowHeight }}>
@@ -440,16 +464,6 @@ export default function App() {
                             {totalCount} <span className="text-[10px] font-normal text-gray-400">cái</span> <span className="text-gray-500 font-normal mx-0.5">|</span> {totalRevenue}k
                         </div>
                     </button>
-
-                    {!isSearchVisible && (
-                        <button 
-                            onClick={() => resetSearchTimer()} 
-                            className="p-1.5 text-gray-400 hover:text-white transition-colors rounded-lg hover:bg-white/5 active:scale-95 cursor-pointer"
-                            title="Mở tìm kiếm"
-                        >
-                            <SearchIcon size={18} />
-                        </button>
-                    )}
 
                     <div className="relative">
                         <button 
@@ -533,77 +547,39 @@ export default function App() {
                     </div>
                 </div>
             </div>
-            
 
-
-            {/* Search Bar under Stats - Smooth collapse/expand based on scroll direction & auto-hide */}
-            <div className={`px-4 transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] overflow-hidden ${
-                isSearchVisible 
-                    ? 'max-h-16 opacity-100 mt-3 transform translate-y-0 scale-100' 
-                    : 'max-h-0 opacity-0 mt-0 pointer-events-none transform -translate-y-2 scale-95'
-            }`}>
-                <div className="relative flex items-center bg-[#0e1621] rounded-full border border-white/5 shadow-inner">
-                    <span className="absolute left-3 text-gray-400"><SearchIcon size={18} /></span>
-                    <input 
-                        value={search}
-                        onChange={(e) => {
-                            const val = e.target.value;
-                            setSearch(val);
-                            setIsSearchVisible(true);
-                            if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-                            if (val.trim()) {
-                                const numMatch = val.trim().match(/^(\d+)\s*(k|ka|ca|cành)?$/i);
-                                if (numMatch && parseInt(numMatch[1], 10) >= 5) {
-                                    addRecentSearchPrice(numMatch[1]);
-                                } else {
-                                    const extracted = extractPriceFromContent(val);
-                                    if (extracted.price && parseInt(extracted.price, 10) >= 5) {
-                                        addRecentSearchPrice(extracted.price);
-                                    }
+            {/* Search Bar under Stats - Permanently visible, instant access */}
+            <div className="px-3 pt-2 pb-1">
+                <SearchBar
+                    value={search}
+                    onSearchChange={(val) => {
+                        setSearch(val);
+                        if (val.trim()) {
+                            const numMatch = val.trim().match(/^(\d+)\s*(k|ka|ca|cành)?$/i);
+                            if (numMatch && parseInt(numMatch[1], 10) >= 5) {
+                                addRecentSearchPrice(numMatch[1]);
+                            } else {
+                                const extracted = extractPriceFromContent(val);
+                                if (extracted.price && parseInt(extracted.price, 10) >= 5) {
+                                    addRecentSearchPrice(extracted.price);
                                 }
                             }
-                        }}
-                        onFocus={() => {
-                            setIsSearchFocused(true);
-                            setIsSearchVisible(true);
-                            if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-                        }}
-                        onBlur={() => {
-                            if (search.trim()) {
-                                const numMatch = search.trim().match(/^(\d+)\s*(k|ka|ca|cành)?$/i);
-                                if (numMatch && parseInt(numMatch[1], 10) >= 5) {
-                                    addRecentSearchPrice(numMatch[1]);
-                                } else {
-                                    const extracted = extractPriceFromContent(search);
-                                    if (extracted.price && parseInt(extracted.price, 10) >= 5) {
-                                        addRecentSearchPrice(extracted.price);
-                                    }
-                                }
-                            }
-                            setTimeout(() => {
-                                setIsSearchFocused(false);
-                                if (!search) {
-                                    resetSearchTimer();
-                                }
-                            }, 250);
-                        }}
-                        placeholder="Tìm chat, tên khách, lệnh /top10, /vip..."
-                        className="w-full pl-10 pr-10 py-2.5 bg-transparent text-white text-sm focus:outline-none placeholder-gray-400 font-medium"
-                    />
-                    {(search || isSearchFocused) && (
-                        <button 
-                            onMouseDown={(e) => e.preventDefault()}
-                            onClick={() => {
-                                setSearch('');
-                                setIsSearchFocused(false);
-                                resetSearchTimer();
-                            }} 
-                            className="absolute right-3 text-gray-400 hover:text-white bg-white/10 rounded-full w-5 h-5 flex items-center justify-center text-xs font-bold transition-colors cursor-pointer"
-                        >
-                            ✕
-                        </button>
-                    )}
-                </div>
+                        }
+                    }}
+                    isFocused={isSearchFocused}
+                    onFocus={() => {
+                        setIsSearchFocused(true);
+                    }}
+                    onBlur={() => {
+                        setTimeout(() => {
+                            setIsSearchFocused(false);
+                        }, 250);
+                    }}
+                    onClear={() => {
+                        setSearch('');
+                        setIsSearchFocused(false);
+                    }}
+                />
             </div>
         </div>
 
@@ -611,7 +587,7 @@ export default function App() {
         {search.startsWith('/') && COMMANDS.filter(c => c.cmd.startsWith(search.toLowerCase()) && c.cmd !== search.toLowerCase()).length > 0 ? (
             <div 
                 onMouseDown={(e) => e.preventDefault()}
-                className={`bg-[#1c242f] border-b border-white/10 z-50 absolute w-full shadow-2xl transition-all duration-300 bottom-[58px] overflow-y-auto ${isSearchVisible ? "top-[96px] sm:top-[98px]" : "top-[48px] sm:top-[50px]"}`}
+                className="bg-[#1c242f] border-b border-white/10 z-50 absolute w-full shadow-2xl transition-all duration-200 bottom-[58px] overflow-y-auto top-[96px] sm:top-[98px]"
             >
                 <div className="sticky top-0 z-10 flex items-center justify-between px-4 pt-3 pb-2 border-b border-white/5 bg-[#131d2a]">
                     <span className="text-[11px] font-bold text-blue-400 uppercase tracking-wider">
@@ -640,7 +616,7 @@ export default function App() {
         ) : (isSearchFocused || search) && quickResults.items.length > 0 ? (
             <div 
                 onMouseDown={(e) => e.preventDefault()}
-                className={`bg-[#1c242f] border-b border-white/10 z-50 absolute w-full shadow-2xl overflow-y-auto transition-all duration-300 bottom-[58px] ${isSearchVisible ? "top-[96px] sm:top-[98px]" : "top-[48px] sm:top-[50px]"}`}
+                className="bg-[#1c242f] border-b border-white/10 z-50 absolute w-full shadow-2xl overflow-y-auto transition-all duration-200 bottom-[58px] top-[96px] sm:top-[98px]"
             >
                 <div className="sticky top-0 z-10 flex items-center justify-between px-4 pt-3 pb-2 border-b border-white/5 bg-[#131d2a]">
                     <span className="text-[11px] font-bold text-[#ffca28] uppercase tracking-wider">
@@ -657,8 +633,7 @@ export default function App() {
                 <div className="divide-y divide-white/5 pb-4">
                     {quickResults.items.map((m, idx) => {
                         const cleanUser = normalizeUser(m.user);
-                        const commentWithAvatar = store[m.platform as Platform].comments.find(c => normalizeUser(c.user) === cleanUser && c.avatar);
-                        const avatarUrl = commentWithAvatar?.avatar;
+                        const avatarUrl = getCustomerAvatar(cleanUser, m.platform as Platform);
                         const nickname = store[m.platform as Platform].nicknames?.[cleanUser];
                         const displayName = nickname ? `${cleanUser} (${nickname})` : cleanUser;
                         const pLink = store[m.platform as Platform].pancakeLinks?.[cleanUser];
@@ -766,7 +741,7 @@ export default function App() {
             <div className="w-full shrink-0 snap-center h-full flex flex-col relative overflow-hidden">
                 <ErrorBoundary>
                     <Feed 
-                        searchKeyword={search} 
+                        searchKeyword={isSearchFocused ? '' : search} 
                         hostMode={hostMode} 
                         onOpenPrice={(id, user, platform, defaultPrice) => {
                             setPendingPrint({ id, user, platform, defaultPrice });
@@ -789,7 +764,7 @@ export default function App() {
                 <ListModal 
                     isPage={true}
                     filterPlatform={listFilter} 
-                    searchKeyword={search}
+                    searchKeyword={isSearchFocused ? '' : search} 
                     onClose={() => {}} 
                     onOpenProfile={(u, p) => { 
                         setProfileUser({ user: u, platform: p }); 
@@ -811,7 +786,7 @@ export default function App() {
             <div className="w-full shrink-0 snap-center h-full bg-transparent relative overflow-hidden">
                 <CustomersModal 
                     isPage={true}
-                    searchKeyword={search}
+                    searchKeyword={isSearchFocused ? '' : search} 
                     onClose={() => {}} 
                     onOpenProfile={(u, p) => { 
                         setProfileUser({ user: u, platform: p }); 

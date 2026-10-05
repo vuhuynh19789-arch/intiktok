@@ -236,7 +236,7 @@ export const PancakeOrderPushModal: React.FC<PancakeOrderPushModalProps> = ({
       const finalCod = Math.max(0, totalItemsPriceVnd + shippingFee - prepaidAmount);
       let autoMsg = `Dạ em chào ${recipientName || cleanUser}, Shop đã tạo đơn thành công cho mình trên Live ạ! ❤️\n\n` +
         `📦 Mã đơn hàng: #${orderCode}\n` +
-        `🛍️ Chi tiết sản phẩm (${orderItems.length} món):\n${itemNotices}\n` +
+        `🛍️ Chi tiết sản phẩm (${orderItems.reduce((sum, it) => sum + (it.quantity || 1), 0)} món):\n${itemNotices}\n` +
         `💰 Tiền hàng: ${totalItemsPriceVnd.toLocaleString('vi-VN')}đ\n` +
         `🚚 Phí vận chuyển: ${shippingFee.toLocaleString('vi-VN')}đ\n`;
 
@@ -956,7 +956,7 @@ export const PancakeOrderPushModal: React.FC<PancakeOrderPushModalProps> = ({
                 <div className="flex items-center justify-between">
                   <h4 className="text-xs font-black text-gray-200 uppercase tracking-wider flex items-center gap-1.5">
                     <Package size={14} className="text-orange-400" />
-                    <span>Chi tiết sản phẩm ({orderItems.length} món):</span>
+                    <span>Chi tiết sản phẩm ({orderItems.reduce((sum, it) => sum + (it.quantity || 1), 0)} món):</span>
                   </h4>
                   <div className="flex items-center gap-2">
                     <button
