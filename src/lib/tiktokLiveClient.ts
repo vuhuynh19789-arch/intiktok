@@ -684,10 +684,11 @@ export async function connectTikTokLive(username: string): Promise<{ success: bo
     return { success: false, error: friendlyError };
   }
 
-  currentStatus.isConnected = true;
+  const isActuallyLive = Boolean(data.isConnected && data.roomId) || (data.isConnected === true);
+  currentStatus.isConnected = isActuallyLive;
   currentStatus.username = cleanName;
   currentStatus.roomId = data.roomId || null;
-  currentStatus.lastError = null;
+  currentStatus.lastError = isActuallyLive ? null : (data.lastError || `Kênh @${cleanName} hiện chưa phát live.`);
   notifyStatusListeners();
 
   // If fallback URL succeeded and primary was broken, auto-update
@@ -707,7 +708,7 @@ export async function connectTikTokLive(username: string): Promise<{ success: bo
   } catch {}
 
   initTikTokEventSource();
-  return { success: true };
+  return { success: isActuallyLive, error: isActuallyLive ? undefined : currentStatus.lastError || undefined };
 }
 
 export async function disconnectTikTokLive(): Promise<{ success: boolean }> {

@@ -7,6 +7,7 @@ import { openPancakeApp, parsePancakeContact } from '../lib/pancakeDeepLink';
 import { getCustomerInsight, getOrderStatusLabel, getPartnerStatusLabel, syncSingleCustomerPancakeOrders, checkCustomerPancakeShippedStatus, formatDateTime, parseOrderTimestamp, toStartOfDay } from '../lib/pancakeSync';
 import { PancakeOrderPushModal } from './PancakeOrderPushModal';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { useSwipeToDismiss } from '../lib/useSwipeToDismiss';
 
 
 export function CopyButton({ text, className = "" }: { text: string, className?: string }) {
@@ -82,6 +83,7 @@ export function QuickPriceQtyModal({
     onClose: () => void;
 }) {
     if (!target) return null;
+    const { modalStyle, touchHandlers } = useSwipeToDismiss({ onClose, enabled: !!target });
     const store = useStore();
     const [price, setPrice] = useState<number | string>(target.unitPrice);
     const [qty, setQty] = useState<number>(target.quantity || 1);
@@ -105,8 +107,10 @@ export function QuickPriceQtyModal({
         <div 
             className="fixed inset-0 z-[9999] bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
             onClick={onClose}
+            {...touchHandlers}
         >
             <div 
+                style={modalStyle}
                 className="bg-[#0f172a] border border-cyan-500/40 w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden p-5 space-y-4"
                 onClick={e => e.stopPropagation()}
             >
@@ -241,6 +245,7 @@ export type { ParsedCalculatorItem } from './ItemCalculatorModal';
 export { ItemCalculatorModal, parseOrderFormula };
 
 export function PriceModal({ pendingPrint, onClose }: { pendingPrint: { id: string | null, user: string, platform: Platform, defaultPrice?: string }, onClose: () => void }) {
+    const { modalStyle, touchHandlers } = useSwipeToDismiss({ onClose });
     const store = useStore();
     const cleanUser = normalizeUser(pendingPrint.user);
     const pStore = store[pendingPrint.platform];
@@ -332,8 +337,8 @@ export function PriceModal({ pendingPrint, onClose }: { pendingPrint: { id: stri
 
     if (isMulti) {
         return (
-            <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-2 sm:p-4">
-                <div className="bg-[#1c242f] rounded-xl p-5 w-full max-w-sm flex flex-col items-center shadow-2xl">
+            <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-2 sm:p-4" {...touchHandlers}>
+                <div style={modalStyle} className="bg-[#1c242f] rounded-xl p-5 w-full max-w-sm flex flex-col items-center shadow-2xl">
                     <h3 className="text-xl font-bold text-blue-400 mb-2">🖨️ Đang in nhiều tem</h3>
                     <p className="text-gray-400 mb-6 font-medium text-lg">Tiến độ: {printIndex} / {printQueue.length} tem</p>
                     
@@ -367,8 +372,8 @@ export function PriceModal({ pendingPrint, onClose }: { pendingPrint: { id: stri
     }
 
     return (
-        <div className="fixed inset-0 bg-black/50 z-[100] flex items-start justify-center pt-32 px-4">
-            <div className="bg-[#1c242f] rounded-xl p-5 w-full max-w-sm flex flex-col overflow-hidden shadow-2xl border border-white/10">
+        <div className="fixed inset-0 bg-black/50 z-[100] flex items-start justify-center pt-32 px-4" {...touchHandlers}>
+            <div style={modalStyle} className="bg-[#1c242f] rounded-xl p-5 w-full max-w-sm flex flex-col overflow-hidden shadow-2xl border border-white/10">
                 <div className="flex items-center justify-between mb-2">
                     <h3 className="text-xl font-bold text-blue-400">💰 Nhập giá</h3>
                     <button
@@ -1956,6 +1961,7 @@ export function LiveEfficiencyModal({
 }
 
 export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPancakeLink }: { user: string, platform: Platform, onClose: () => void, onOpenPrice?: (id: string | null, u: string, p: Platform) => void, onOpenPancakeLink?: (user: string, platform: Platform, initialSearch?: string) => void }) {
+    const { modalStyle, touchHandlers } = useSwipeToDismiss({ onClose });
     const store = useStore();
     const cleanUser = normalizeUser(user);
     
@@ -2032,11 +2038,11 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
     const avatarUrl = getCustomerAvatar(cleanUser, platform) || undefined;
 
     return (
-        <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-2 sm:p-4">
-            <div className="bg-[#1c242f] rounded-xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden shadow-2xl">
+        <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-2 sm:p-4" {...touchHandlers}>
+            <div style={modalStyle} className="bg-[#1c242f] rounded-xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden shadow-2xl">
                 {/* Header banner */}
                 <div className={`h-10 relative ${PLATFORMS[platform].bgClass} shrink-0 rounded-t-xl`}>
-                    <button onClick={onClose} className="absolute top-1 right-2 bg-black/20 text-white rounded-full w-8 h-8 flex items-center justify-center hover:bg-black/40 backdrop-blur font-bold z-10">✕</button>
+                    <button onClick={onClose} className="absolute top-1 right-2 bg-black/20 text-white rounded-full w-8 h-8 flex items-center justify-center hover:bg-black/40 backdrop-blur font-bold z-10 cursor-pointer">✕</button>
                 </div>
                 
                 {/* Sticky Profile Header */}
@@ -2737,6 +2743,18 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
                                             <span>+ Thêm món</span>
                                         </button>
 
+                                        {/* Nút Tự động gom nhóm các món cùng giá */}
+                                        {currentItems.length > 1 && (
+                                            <button
+                                                type="button"
+                                                onClick={() => store.groupCustomerItemsByPrice(platform, cleanUser, false)}
+                                                title="Tự động gom nhóm các món có cùng đơn giá lại với nhau"
+                                                className="text-[11px] font-bold text-cyan-300 hover:text-white bg-cyan-950/50 hover:bg-cyan-900/70 px-2.5 py-1.5 rounded-xl border border-cyan-500/40 flex items-center gap-1 cursor-pointer transition-all active:scale-95"
+                                            >
+                                                <span>✨ Gom cùng giá</span>
+                                            </button>
+                                        )}
+
                                         {selectedCurrent.size > 0 ? (
                                             <>
                                                 <button
@@ -2983,8 +3001,8 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
                         );
                     })()}
                     <div>
-                        <div className="text-sm font-bold text-gray-100 mb-3 flex justify-between items-center">
-                            <div className="flex items-center gap-3">
+                        <div className="text-sm font-bold text-gray-100 mb-3 flex justify-between items-center flex-wrap gap-2">
+                            <div className="flex items-center gap-2.5 flex-wrap">
                                 <span>⏳ Đang giữ đơn (các phiên trước)</span>
                                 {cust?.pastItems && cust.pastItems.length > 0 && (
                                     <label className="flex items-center gap-1.5 text-xs font-normal cursor-pointer text-gray-400 bg-[#1c242f] hover:bg-white/10 px-2 py-1 rounded transition-colors">
@@ -3002,6 +3020,16 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
                                         />
                                         Chọn tất cả ({cust.pastItems.length})
                                     </label>
+                                )}
+                                {cust?.pastItems && cust.pastItems.length > 1 && (
+                                    <button 
+                                        type="button"
+                                        onClick={() => store.groupCustomerItemsByPrice(platform, cleanUser, true)}
+                                        title="Tự động gom nhóm các món có cùng đơn giá lại với nhau"
+                                        className="text-[11px] font-bold text-cyan-300 hover:text-white bg-cyan-950/50 hover:bg-cyan-900/70 px-2.5 py-1 rounded-md border border-cyan-500/40 flex items-center gap-1 cursor-pointer transition-all active:scale-95"
+                                    >
+                                        <span>✨ Gom cùng giá</span>
+                                    </button>
                                 )}
                             </div>
                             {selectedPast.size > 0 && (
@@ -3207,6 +3235,24 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
                             );
                         })()}
                     </div>
+
+                    {/* Nút Xoá toàn bộ giỏ hàng và lịch sử cho khách */}
+                    {cust && ((cust.items && cust.items.length > 0) || (cust.pastItems && cust.pastItems.length > 0)) && (
+                        <div className="pt-4 mt-2 border-t border-white/10 flex justify-end">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    if (window.confirm(`Xác nhận xoá sạch giỏ hàng và lịch sử đơn của khách @${cleanUser}?`)) {
+                                        store.clearCustomerCart(platform, cleanUser);
+                                    }
+                                }}
+                                className="text-xs text-red-400 hover:text-red-300 bg-red-950/30 hover:bg-red-900/50 border border-red-500/30 px-3 py-1.5 rounded-xl font-bold flex items-center gap-1.5 cursor-pointer transition-all active:scale-95"
+                            >
+                                <Trash2 size={13} />
+                                <span>Xoá sạch giỏ hàng & lịch sử khách này</span>
+                            </button>
+                        </div>
+                    )}
                 </div>
             </div>
 

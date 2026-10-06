@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Calculator, Tag, Printer, Plus } from 'lucide-react';
 import { useStore } from '../store';
 import { Platform, PLATFORMS, getShortId, normalizeUser, getLastClosedPrice, getRecentSearchPrices } from '../lib/core';
+import { useSwipeToDismiss } from '../lib/useSwipeToDismiss';
 
 export interface ParsedCalculatorItem {
     id: string;
@@ -114,6 +115,7 @@ export function ItemCalculatorModal({
     onClose: () => void;
     onAdded?: (addedItems?: ParsedCalculatorItem[]) => void;
 }) {
+    const { modalStyle, touchHandlers } = useSwipeToDismiss({ onClose });
     const store = useStore();
     const cleanUser = normalizeUser(user);
     const pStore = store[platform];
@@ -292,8 +294,9 @@ export function ItemCalculatorModal({
                     onClose();
                 }
             }}
+            {...touchHandlers}
         >
-            <div className="bg-[#0f1724] rounded-3xl w-full max-w-md flex flex-col overflow-hidden shadow-2xl border-2 border-cyan-500/40 animate-in fade-in zoom-in-95">
+            <div style={modalStyle} className="bg-[#0f1724] rounded-3xl w-full max-w-md flex flex-col overflow-hidden shadow-2xl border-2 border-cyan-500/40 animate-in fade-in zoom-in-95">
                 {/* Header */}
                 <div className={`p-3 bg-gradient-to-r ${PLATFORMS[platform].bgClass || 'from-blue-600 to-indigo-700'} text-white flex items-center justify-between shadow-md`}>
                     <div className="flex items-center gap-2 min-w-0">

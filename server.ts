@@ -6,6 +6,16 @@ import net from "net";
 import { exec } from "child_process";
 import { TikTokLiveConnection } from "tiktok-live-connector";
 
+process.on("uncaughtException", (err) => {
+  const msg = err && err.message ? err.message : String(err);
+  console.error("🛡️ [Server Anti-Crash] Đã chặn lỗi Uncaught Exception:", msg);
+});
+
+process.on("unhandledRejection", (reason) => {
+  const msg = reason && (reason as any).message ? (reason as any).message : String(reason);
+  console.error("🛡️ [Server Anti-Crash] Đã chặn lỗi Unhandled Rejection:", msg);
+});
+
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
@@ -382,6 +392,7 @@ async function connectToTikTokLive(username: string, syncFirebaseRoom: string = 
     broadcastSSE("status", currentTikTokState);
     return {
       success: true,
+      isConnected: true,
       username: targetUser,
       roomId: currentTikTokState.roomId,
       state: currentTikTokState

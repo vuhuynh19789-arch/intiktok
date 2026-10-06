@@ -36,9 +36,9 @@ if ! command -v pm2 &> /dev/null; then
   npm install -g pm2
 fi
 
-echo "-> [4/4] Khởi động lại dịch vụ cào TikTok..."
-pm2 delete all > /dev/null 2>&1 || true
-pm2 start armbian-server.cjs --name tiktok-server
+echo "-> [4/4] Khởi động lại dịch vụ cào TikTok với bộ giáp chống sập 24/7..."
+pm2 delete tiktok-server > /dev/null 2>&1 || true
+pm2 start armbian-server.cjs --name tiktok-server --max-memory-restart 250M --exp-backoff-restart-delay=100 --time --node-args="--max-old-space-size=256"
 pm2 save > /dev/null 2>&1 || true
 
 # Lấy địa chỉ IP mạng nội bộ

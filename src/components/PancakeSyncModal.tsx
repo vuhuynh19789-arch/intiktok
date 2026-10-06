@@ -12,6 +12,7 @@ import {
 import { openPancakeApp } from '../lib/pancakeDeepLink';
 import { useStore } from '../store';
 import { Platform } from '../lib/core';
+import { useSwipeToDismiss } from '../lib/useSwipeToDismiss';
 
 interface PancakeSyncModalProps {
   isOpen: boolean;
@@ -20,6 +21,7 @@ interface PancakeSyncModalProps {
 }
 
 export const PancakeSyncModal: React.FC<PancakeSyncModalProps> = ({ isOpen, onClose, onSuccess }) => {
+  const { modalStyle, touchHandlers } = useSwipeToDismiss({ onClose, enabled: isOpen });
   const store = useStore();
   const [tokenInput, setTokenInput] = useState(getPancakeToken());
   const [isEditingToken, setIsEditingToken] = useState(false);
@@ -115,8 +117,9 @@ export const PancakeSyncModal: React.FC<PancakeSyncModalProps> = ({ isOpen, onCl
   });
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md p-2 sm:p-4 animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md p-2 sm:p-4 animate-in fade-in duration-200" {...touchHandlers}>
       <div 
+        style={modalStyle}
         className="bg-[#151f2e] border border-orange-500/30 rounded-2xl w-full max-w-4xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >

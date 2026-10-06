@@ -120,6 +120,8 @@ export interface AppState {
   deletePastItems: (platform: Platform, user: string, itemIndices: number[]) => void;
   archiveCustomerItems: (platform: Platform, user: string) => void;
   clearShippedPastItems: (platform: Platform, user: string) => void;
+  clearCustomerCart: (platform: Platform, user: string) => void;
+  groupCustomerItemsByPrice: (platform: Platform, user: string, isPast?: boolean) => void;
   resetSession: () => void;
   clearFeed: (platform?: Platform) => void;
   addComment: (platform?: Platform, comment?: CommentData) => void;
@@ -1763,6 +1765,112 @@ const decodeKeys = (obj: any) => {
             }
 
             const now = Date.now();
+            set(s => ({ [platform]: { ...s[platform], customers: newCusts, lastCustomersAt: now } }));
+            localStorage.setItem(`slp_webapp_session_${platform}`, JSON.stringify(newCusts));
+            pushData(platform, 'customers', newCusts, now);
+        },
+
+        clearCustomerCart: (platform, rawUser) => {
+            const user = normalizeUser(rawUser);
+            if (!user) return;
+            const state = get()[platform];
+            const cust = state.customers[user];
+            if (!cust) return;
+            const newCusts = { ...state.customers };
+            const now = Date.now();
+            newCusts[user] = {
+                ...cust,
+                count: 0,
+                total: 0,
+                items: [],
+                pastItems: [],
+                lastTime: now
+            };
+            set(s => ({ [platform]: { ...s[platform], customers: newCusts, lastCustomersAt: now } }));
+            localStorage.setItem(`slp_webapp_session_${platform}`, JSON.stringify(newCusts));
+            pushData(platform, 'customers', newCusts, now);
+        },
+
+        groupCustomerItemsByPrice: (platform, rawUser, isPast = false) => {
+            const user = normalizeUser(rawUser);
+            if (!user) return;
+            const state = get()[platform];
+            const cust = state.customers[user];
+            if (!cust) return;
+            const newCusts = { ...state.customers };
+            const now = Date.now();
+
+            if (isPast) {
+                const past = cust.pastItems || [];
+                if (past.length <= 1) return;
+                const priceMap = new Map<number, OrderItem>();
+                for (const it of past) {
+                    const qty = Math.max(1, it.quantity || 1);
+                    const unitPrice = it.unitPrice || (it.price ? Math.round(it.price / qty) : 0);
+                    if (priceMap.has(unitPrice)) {
+                        const ex = priceMap.get(unitPrice)!;
+                        ex.quantity = (ex.quantity || 1) + qty;
+                        ex.price = unitPrice * ex.quantity;
+                        if (it.content && !ex.content.includes(it.content)) {
+                            if (!ex.content || ex.content.startsWith('Sản phẩm ')) {
+                                ex.content = it.content;
+                            } else {
+                                ex.content = `${ex.content}, ${it.content}`;
+                            }
+                        }
+                    } else {
+                        priceMap.set(unitPrice, {
+                            ...it,
+                            unitPrice,
+                            quantity: qty,
+                            price: unitPrice * qty
+                        });
+                    }
+                }
+                newCusts[user] = {
+                    ...cust,
+                    pastItems: Array.from(priceMap.values()),
+                    lastTime: now
+                };
+            } else {
+                const current = cust.items || [];
+                if (current.length <= 1) return;
+                const priceMap = new Map<number, OrderItem>();
+                for (const it of current) {
+                    const qty = Math.max(1, it.quantity || 1);
+                    const unitPrice = it.unitPrice || (it.price ? Math.round(it.price / qty) : 0);
+                    if (priceMap.has(unitPrice)) {
+                        const ex = priceMap.get(unitPrice)!;
+                        ex.quantity = (ex.quantity || 1) + qty;
+                        ex.price = unitPrice * ex.quantity;
+                        if (it.content && !ex.content.includes(it.content)) {
+                            if (!ex.content || ex.content.startsWith('Sản phẩm ')) {
+                                ex.content = it.content;
+                            } else {
+                                ex.content = `${ex.content}, ${it.content}`;
+                            }
+                        }
+                    } else {
+                        priceMap.set(unitPrice, {
+                            ...it,
+                            unitPrice,
+                            quantity: qty,
+                            price: unitPrice * qty
+                        });
+                    }
+                }
+                const grouped = Array.from(priceMap.values());
+                const newCount = grouped.reduce((sum, it) => sum + (it.quantity || 1), 0);
+                const newTotal = grouped.reduce((sum, it) => sum + (it.price || 0), 0);
+                newCusts[user] = {
+                    ...cust,
+                    items: grouped,
+                    count: newCount,
+                    total: newTotal,
+                    lastTime: now
+                };
+            }
+
             set(s => ({ [platform]: { ...s[platform], customers: newCusts, lastCustomersAt: now } }));
             localStorage.setItem(`slp_webapp_session_${platform}`, JSON.stringify(newCusts));
             pushData(platform, 'customers', newCusts, now);

@@ -23,40 +23,35 @@ export const LiveSupervisorModal: React.FC<LiveSupervisorModalProps> = () => {
   const [toastMessage, setToastMessage] = useState<string>('');
   const [toastType, setToastType] = useState<'connected' | 'offline' | 'scanning'>('connected');
   
-  const initialBootDoneRef = useRef<boolean>(false);
-  const prevConnectedRef = useRef<boolean>(false);
+  const connectedStartTimeRef = useRef<number>(0);
+  const prevConnectedRef = useRef<boolean>(getTikTokStatus().isConnected && Boolean(getTikTokStatus().roomId));
   const toastTimeoutRef = useRef<any>(null);
+  const lastToastTimeRef = useRef<number>(0);
 
-  // 1. Khởi chạy tự động quét kết nối kênh chính trong background (không hiện popup quấy rầy)
-  useEffect(() => {
-    if (initialBootDoneRef.current) return;
-    initialBootDoneRef.current = true;
-
-    const targetChan = localStorage.getItem('slp_last_tiktok_channel') || DEFAULT_TIKTOK_CHANNEL;
-    // Kích hoạt kết nối kênh trong nền nếu chưa kết nối
-    const currentSt = getTikTokStatus();
-    if (!currentSt.isConnected) {
-      connectTikTokLive(targetChan).catch(() => {});
-    }
-
-    return () => {
-      if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
-    };
-  }, []);
-
-  // 2. Lắng nghe trạng thái TikTok Live theo thời gian thực
-  // CHỈ hiện toast 1 lần duy nhất khi kênh thực sự VỪA BẮT ĐẦU LIVE thành công
-  // Tuyệt đối không hiện popup chặn màn hình quấy rầy người dùng
+  // Lắng nghe trạng thái TikTok Live theo thời gian thực
+  // CHỈ hiện toast 1 lần duy nhất khi kênh thực sự BẮT ĐẦU LIVE (có roomId)
+  // Tuyệt đối không loop popup khi phiên live kết thúc hoặc khi chưa live
   useEffect(() => {
     const unsub = subscribeTikTokStatus((newStatus) => {
       setStatus(newStatus);
 
-      // Trường hợp: Kênh VỪA KẾT NỐI THÀNH CÔNG (từ false -> true)
-      if (newStatus.isConnected && !prevConnectedRef.current) {
+      // Nếu đang ở chế độ cào Tampermonkey (browser_dom) hoặc người dùng bật Mute cảnh báo -> không hiện toast làm phiền
+      if (newStatus.crawlerMode === 'browser_dom' || isMuteNotLiveAlert() || newStatus.muteNotLiveAlert) {
+        setShowToast(false);
+        return;
+      }
+
+      const isActuallyLive = Boolean(newStatus.isConnected && newStatus.roomId);
+      const now = Date.now();
+
+      // Trường hợp: Kênh VỪA BẮT ĐẦU LIVE THÀNH CÔNG (từ offline -> online có roomId)
+      if (isActuallyLive && !prevConnectedRef.current) {
         prevConnectedRef.current = true;
+        connectedStartTimeRef.current = now;
         
-        // Nếu người dùng không tắt cảnh báo
-        if (!isMuteNotLiveAlert()) {
+        // Cooldown tối thiểu 30s giữa các thông báo kết nối
+        if (now - lastToastTimeRef.current > 30000) {
+          lastToastTimeRef.current = now;
           setToastType('connected');
           setToastMessage(`✅ Kênh @${newStatus.username} Đang Live! Đã kết nối cào bình luận.`);
           setShowToast(true);
@@ -67,12 +62,14 @@ export const LiveSupervisorModal: React.FC<LiveSupervisorModalProps> = () => {
           }, 3500);
         }
       } 
-      // Trường hợp: Trước đó đang live mà bị tắt (từ true -> false)
-      else if (!newStatus.isConnected && prevConnectedRef.current) {
+      // Trường hợp: Trước đó ĐANG LIVE THẬT SỰ (>15s) mà phiên live vừa kết thúc
+      else if (!isActuallyLive && prevConnectedRef.current) {
+        const liveDuration = now - connectedStartTimeRef.current;
         prevConnectedRef.current = false;
         
-        // Không hiện popup chặn màn hình, chỉ toast nhẹ 3s nếu không mute
-        if (!isMuteNotLiveAlert()) {
+        // Chỉ hiện thông báo kết thúc nếu phiên live đã diễn ra ít nhất 15 giây (tránh chớp tắt do thử kết nối)
+        if (liveDuration >= 15000 && (now - lastToastTimeRef.current > 30000)) {
+          lastToastTimeRef.current = now;
           setToastType('offline');
           setToastMessage(`ℹ️ Phiên Live @${newStatus.username || 'TikTok'} vừa kết thúc.`);
           setShowToast(true);

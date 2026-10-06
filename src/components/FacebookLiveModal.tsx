@@ -39,6 +39,7 @@ import {
   triggerRemoteServerUpdate
 } from '../lib/tiktokLiveClient';
 import { useStore } from '../store';
+import { useSwipeToDismiss } from '../lib/useSwipeToDismiss';
 
 interface FacebookLiveModalProps {
   isOpen: boolean;
@@ -47,6 +48,7 @@ interface FacebookLiveModalProps {
 }
 
 export const FacebookLiveModal: React.FC<FacebookLiveModalProps> = ({ isOpen, onClose, onBack }) => {
+  const { modalStyle, touchHandlers } = useSwipeToDismiss({ onClose: onBack || onClose, enabled: isOpen });
   const [target, setTarget] = useState<string>(() => {
     try {
       return localStorage.getItem('slp_last_fb_target') || '';
@@ -222,8 +224,10 @@ export const FacebookLiveModal: React.FC<FacebookLiveModalProps> = ({ isOpen, on
     <div 
       className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm animate-fadeIn"
       onClick={handleCloseOrBack}
+      {...touchHandlers}
     >
       <div 
+        style={modalStyle}
         className="bg-[#141c28] border border-white/10 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[92vh]"
         onClick={(e) => e.stopPropagation()}
       >

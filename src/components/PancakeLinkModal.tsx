@@ -4,6 +4,7 @@ import { useStore, getCustomerAvatar } from '../store';
 import { Platform, PLATFORMS, getShortId, normalizeUser } from '../lib/core';
 import { openPancakeApp } from '../lib/pancakeDeepLink';
 import { CustomerAvatar } from './UserAvatar';
+import { useSwipeToDismiss } from '../lib/useSwipeToDismiss';
 import { 
   fetchRecentZaloConversations, 
   ZaloInboxConversation, 
@@ -31,6 +32,7 @@ export const PancakeLinkModal: React.FC<PancakeLinkModalProps> = ({
     onClose,
     onSuccess
 }) => {
+    const { modalStyle, touchHandlers } = useSwipeToDismiss({ onClose, enabled: isOpen });
     const store = useStore();
     const cleanUser = normalizeUser(user);
     const existingLink = store[platform].pancakeLinks?.[cleanUser] || '';
@@ -153,8 +155,9 @@ export const PancakeLinkModal: React.FC<PancakeLinkModalProps> = ({
     const hasLinked = !!existingLink;
 
     return (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+        <div className="fixed inset-0 z-[120] flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200" {...touchHandlers}>
             <div 
+                style={modalStyle}
                 className="bg-[#18202d] border border-white/10 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 flex flex-col max-h-[92vh]"
                 onClick={e => e.stopPropagation()}
             >

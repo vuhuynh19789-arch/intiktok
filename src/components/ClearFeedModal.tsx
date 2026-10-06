@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Trash2, X, Check, ShieldCheck, AlertCircle } from 'lucide-react';
 import { useStore } from '../store';
 import { Platform, PLATFORMS } from '../lib/core';
+import { useSwipeToDismiss } from '../lib/useSwipeToDismiss';
 
 interface ClearFeedModalProps {
     isOpen: boolean;
@@ -10,6 +11,7 @@ interface ClearFeedModalProps {
 }
 
 export const ClearFeedModal: React.FC<ClearFeedModalProps> = ({ isOpen, onClose, onSuccess }) => {
+    const { modalStyle, touchHandlers } = useSwipeToDismiss({ onClose, enabled: isOpen });
     const store = useStore();
     const [selectedTarget, setSelectedTarget] = useState<'all' | Platform>('all');
     const [isProcessing, setIsProcessing] = useState(false);
@@ -36,8 +38,9 @@ export const ClearFeedModal: React.FC<ClearFeedModalProps> = ({ isOpen, onClose,
     };
 
     return (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200">
+        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200" {...touchHandlers}>
             <div 
+                style={modalStyle}
                 className="bg-[#1c2533] border border-white/10 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200"
                 onClick={e => e.stopPropagation()}
             >

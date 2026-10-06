@@ -269,6 +269,59 @@ export default function App() {
   }, []);
 
 
+  // Intercept system back button & edge swipe gesture globally so swiping back on mobile phone never closes the app when a modal is open!
+  const hasAnyModalOpen = Boolean(
+    activeModal ||
+    profileUser ||
+    pancakeModalUser ||
+    showTikTokLiveModal ||
+    showFacebookLiveModal ||
+    showClearFeedModal ||
+    showResetSessionModal ||
+    showPancakeSyncModal ||
+    showSmartLiveMonitor ||
+    pendingPrint
+  );
+
+  useEffect(() => {
+    if (!hasAnyModalOpen) return;
+
+    try {
+      window.history.pushState({ appModalOpen: true }, '');
+    } catch {}
+
+    const handlePopState = () => {
+      // Close top-level modal in order of depth
+      if (pendingPrint) setPendingPrint(null);
+      else if (pancakeModalUser) setPancakeModalUser(null);
+      else if (profileUser) setProfileUser(null);
+      else if (activeModal) setActiveModal(null);
+      else if (showTikTokLiveModal) setShowTikTokLiveModal(false);
+      else if (showFacebookLiveModal) setShowFacebookLiveModal(false);
+      else if (showPancakeSyncModal) setShowPancakeSyncModal(false);
+      else if (showClearFeedModal) setShowClearFeedModal(false);
+      else if (showResetSessionModal) setShowResetSessionModal(false);
+      else if (showSmartLiveMonitor) setShowSmartLiveMonitor(false);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [
+    hasAnyModalOpen,
+    pendingPrint,
+    pancakeModalUser,
+    profileUser,
+    activeModal,
+    showTikTokLiveModal,
+    showFacebookLiveModal,
+    showPancakeSyncModal,
+    showClearFeedModal,
+    showResetSessionModal,
+    showSmartLiveMonitor
+  ]);
+
   // Đảm bảo không tự động xoá dữ liệu chốt đơn khi mở máy hoặc sang ngày mới
   // Mọi thao tác reset phiên chốt đơn PHẢI do người dùng chủ động bấm trong modal ResetSessionModal
   useEffect(() => {

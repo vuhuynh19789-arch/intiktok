@@ -32,6 +32,7 @@ import { Platform, PLATFORMS, getShortId, normalizeUser, printBill } from '../li
 import { CustomerAvatar } from './UserAvatar';
 import { ItemCalculatorModal, ParsedCalculatorItem } from './ItemCalculatorModal';
 import { openPancakeApp, parsePancakeContact } from '../lib/pancakeDeepLink';
+import { useSwipeToDismiss } from '../lib/useSwipeToDismiss';
 import { 
   getCustomerInsight, 
   fetchRecentZaloConversations, 
@@ -80,6 +81,7 @@ export const PancakeOrderPushModal: React.FC<PancakeOrderPushModalProps> = ({
   onClose,
   onSuccess
 }) => {
+  const { modalStyle, touchHandlers } = useSwipeToDismiss({ onClose, enabled: isOpen });
   const store = useStore();
   const cleanUser = normalizeUser(user);
   const cust = store[platform].customers[cleanUser];
@@ -533,7 +535,39 @@ export const PancakeOrderPushModal: React.FC<PancakeOrderPushModalProps> = ({
       }
       return updated;
     });
-    setPickingVarForIdx(null);
+  };
+
+  // Tự động gom nhóm các sản phẩm có cùng mức giá lại với nhau
+  const handleGroupItemsByPrice = () => {
+    if (orderItems.length <= 1) return;
+    const priceMap = new Map<number, EditablePushItem>();
+    for (const it of orderItems) {
+      const price = it.priceK || 0;
+      const qty = Math.max(1, it.quantity || 1);
+      if (priceMap.has(price)) {
+        const ex = priceMap.get(price)!;
+        ex.quantity += qty;
+        const currentContent = (it.content || '').trim();
+        if (currentContent && !ex.content.includes(currentContent)) {
+          if (!ex.content || ex.content.startsWith('Sản phẩm ')) {
+            ex.content = currentContent;
+          } else {
+            ex.content = `${ex.content}, ${currentContent}`;
+          }
+        }
+        if (it.variationId && !ex.variationId) {
+          ex.variationId = it.variationId;
+          ex.variationName = it.variationName;
+          ex.displayId = it.displayId;
+        }
+      } else {
+        priceMap.set(price, {
+          ...it,
+          quantity: qty
+        });
+      }
+    }
+    setOrderItems(Array.from(priceMap.values()));
   };
 
   const handlePushOrder = async () => {
@@ -608,15 +642,8 @@ export const PancakeOrderPushModal: React.FC<PancakeOrderPushModalProps> = ({
         store.setCustomerPancakeLink(platform, cleanUser, finalPhone);
       }
 
-      // Auto mark past items as shipped if checked
-      const pastItemsInOrder = orderItems.filter(it => it.isPast && it.originalIndex !== undefined);
-      if (autoMarkShipped && pastItemsInOrder.length > 0) {
-        pastItemsInOrder.forEach(it => {
-          if (it.originalIndex !== undefined) {
-            store.togglePastItemShipped(platform, cleanUser, it.originalIndex);
-          }
-        });
-      }
+      // Tự động xoá toàn bộ lịch sử giỏ hàng của khách sau khi đẩy đơn thành công theo đúng yêu cầu
+      store.clearCustomerCart(platform, cleanUser);
 
       onSuccess?.(res.order);
     } catch (err: any) {
@@ -652,8 +679,8 @@ export const PancakeOrderPushModal: React.FC<PancakeOrderPushModalProps> = ({
   const hasPhone = !!recipientPhone.trim() || parsedContact.type === 'phone_zalo';
 
   return (
-    <div className="fixed inset-0 bg-black/75 z-[120] flex items-center justify-center p-2 sm:p-4 overflow-y-auto backdrop-blur-xs">
-      <div className="bg-[#182230] rounded-2xl w-full max-w-xl max-h-[94vh] flex flex-col overflow-hidden shadow-2xl border border-orange-500/30 animate-in fade-in zoom-in-95 duration-200">
+    <div className="fixed inset-0 bg-black/75 z-[120] flex items-center justify-center p-2 sm:p-4 overflow-y-auto backdrop-blur-xs" {...touchHandlers}>
+      <div style={modalStyle} className="bg-[#182230] rounded-2xl w-full max-w-xl max-h-[94vh] flex flex-col overflow-hidden shadow-2xl border border-orange-500/30 animate-in fade-in zoom-in-95 duration-200">
         
         {/* Modal Header */}
         <div className="bg-gradient-to-r from-orange-600 via-amber-600 to-orange-700 p-3.5 sm:p-4 flex items-center justify-between text-white shrink-0">
@@ -958,7 +985,18 @@ export const PancakeOrderPushModal: React.FC<PancakeOrderPushModalProps> = ({
                     <Package size={14} className="text-orange-400" />
                     <span>Chi tiết sản phẩm ({orderItems.reduce((sum, it) => sum + (it.quantity || 1), 0)} món):</span>
                   </h4>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                    {orderItems.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={handleGroupItemsByPrice}
+                        className="text-[11px] font-bold text-cyan-300 hover:text-white bg-cyan-950/60 hover:bg-cyan-900/80 px-2.5 py-1 rounded-lg border border-cyan-500/40 flex items-center gap-1 transition-all active:scale-95 cursor-pointer shadow-sm"
+                        title="Tự động gộp các sản phẩm có cùng đơn giá lại với nhau"
+                      >
+                        <Sparkles size={12} className="text-cyan-400" />
+                        <span>✨ Gom nhóm cùng giá</span>
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => setIsCalculatorOpen(true)}
@@ -967,7 +1005,7 @@ export const PancakeOrderPushModal: React.FC<PancakeOrderPushModalProps> = ({
                       <Plus size={12} className="stroke-[3]" />
                       <span>+ Thêm món (Bảng tính)</span>
                     </button>
-                    <div className="text-xs font-black text-emerald-400 font-mono">
+                    <div className="text-xs font-black text-emerald-400 font-mono pl-1">
                       {totalItemsPriceVnd.toLocaleString('vi-VN')}đ
                     </div>
                   </div>

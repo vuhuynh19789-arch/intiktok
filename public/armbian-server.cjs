@@ -5,11 +5,39 @@ const net = require("net");
 const os = require("os");
 const { TikTokLiveConnection } = require("tiktok-live-connector");
 
-const CURRENT_SERVER_VERSION = "2.8.0";
+const CURRENT_SERVER_VERSION = "2.9.0";
 const UPDATE_SOURCES = [
   "https://inlivess.vercel.app/armbian-server.cjs",
   "https://raw.githubusercontent.com/haingontayux-cloud/tiktok-live-print/main/public/armbian-server.cjs"
 ];
+
+// =========================================================
+// BỘ GIÁP CHỐNG SẬP TOÀN DIỆN (ANTI-CRASH & SELF-HEALING)
+// =========================================================
+process.on("uncaughtException", (err) => {
+  const msg = err && err.message ? err.message : String(err);
+  console.error("🛡️ [Anti-Crash Guard] Đã chặn lỗi ngoại lệ (Uncaught Exception):", msg);
+});
+
+process.on("unhandledRejection", (reason, promise) => {
+  const msg = reason && reason.message ? reason.message : String(reason);
+  console.error("🛡️ [Anti-Crash Guard] Đã chặn lỗi Promise Rejection:", msg);
+});
+
+// Giám sát RAM định kỳ để không bị OOM Killer của Linux ngắt tiến trình
+setInterval(() => {
+  try {
+    const memUsage = process.memoryUsage();
+    const heapUsedMB = Math.round(memUsage.heapUsed / 1024 / 1024);
+    const rssMB = Math.round(memUsage.rss / 1024 / 1024);
+    if (heapUsedMB > 180 || rssMB > 250) {
+      console.warn(`⚠️ [Memory Warning] Bộ nhớ đang dùng cao (${heapUsedMB}MB Heap / ${rssMB}MB RSS), tự động dọn dẹp cache...`);
+      if (global.gc) {
+        global.gc();
+      }
+    }
+  } catch (e) {}
+}, 30000);
 
 // ==========================================
 // CẤU HÌNH MÁY CHỦ LƯU VĨNH VIỄN TRÊN DISK
@@ -1586,7 +1614,13 @@ app.post("/api/tiktok/connect", async (req, res) => {
   const { username, syncFirebaseRoom = "hienpham_live" } = req.body || {};
   const user = username || liveState.username;
   startTikTok(user, syncFirebaseRoom, false);
-  res.json({ success: true, username: user, isStopped: false });
+  res.json({ 
+    success: true, 
+    username: user, 
+    isConnected: Boolean(liveState.isConnected),
+    roomId: liveState.roomId,
+    isStopped: false 
+  });
 });
 
 app.post("/api/tiktok/clear-comments", (req, res) => {
