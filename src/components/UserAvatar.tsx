@@ -48,6 +48,8 @@ export function getInitials(user: any) {
 
 export function getTagBorderClass(tag?: string) {
     switch (tag) {
+        case 'HOST':
+            return 'border-2 border-yellow-400 ring-2 ring-yellow-400/40';
         case 'VIP':
             return 'border-2 border-amber-400 ring-2 ring-amber-400/30';
         case 'COC':
@@ -147,7 +149,17 @@ export const CustomerAvatar: React.FC<CustomerAvatarProps> = memo(({
                 )}
             </div>
 
-            {/* Tag Badge at Top-Right Corner (VIP Crown, Water Drop for Cọc, etc.) */}
+            {/* Tag Badge at Top-Right Corner (VIP Crown, Host Crown, Water Drop for Cọc, etc.) */}
+            {tag === 'HOST' && (
+                <span 
+                    className={`absolute -top-1.5 -right-1 z-20 font-black rounded-full flex items-center justify-center shadow-lg border border-yellow-200 bg-gradient-to-tr from-yellow-500 to-amber-600 text-white ${
+                        isLarge ? 'w-5 h-5 text-[11px]' : 'w-4 h-4 text-[9px]'
+                    }`}
+                    title="Chủ phòng (HOST)"
+                >
+                    👑
+                </span>
+            )}
             {tag === 'VIP' && (
                 <span 
                     className={`absolute -top-1.5 -right-1 z-20 font-black rounded-full flex items-center justify-center shadow-lg border border-amber-200 bg-gradient-to-tr from-amber-500 to-orange-500 text-white ${

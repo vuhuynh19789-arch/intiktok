@@ -65,45 +65,52 @@ function broadcastSSE(eventType: string, data: any) {
   });
 }
 
-// Helper to push comment to Firebase Realtime Database
-const isTsFromToday = (ts: number): boolean => {
-  if (!ts) return false;
-  const d = new Date(ts);
-  const now = new Date();
-  return d.getFullYear() === now.getFullYear() &&
-         d.getMonth() === now.getMonth() &&
-         d.getDate() === now.getDate();
-};
-
+// Lưu trữ chu kỳ 24h từ lúc mở phiên live đầu tiên trong ngày
+let serverLiveCycleStartedAt: number = 0;
 let serverFeedClearedAt: number = 0;
 
-// Tự động kiểm tra sang ngày mới và làm sạch toàn bộ comment
-let serverCurrentDay = new Date().toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
+// Helper to verify if comment timestamp is within the 24-hour active cycle
+const isTsWithin24h = (ts: number): boolean => {
+  if (!ts) return false;
+  const now = Date.now();
+  // 1. Bình luận trong vòng 24 giờ qua
+  if (now - ts > 24 * 60 * 60 * 1000) return false;
+  // 2. Không được cũ hơn thời điểm chủ shop chủ động bấm xoá feed
+  if (serverFeedClearedAt > 0 && ts <= serverFeedClearedAt) return false;
+  return true;
+};
+
+// Tự động kiểm tra chu kỳ 24h tính từ phiên live đầu tiên (ví dụ 13h hôm nay -> 13h hôm sau)
 setInterval(() => {
-  const todayVN = new Date().toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
-  if (todayVN !== serverCurrentDay) {
-    console.log(`[Server] Bước sang ngày mới (${todayVN}), tự động làm sạch toàn bộ bình luận cũ.`);
-    serverCurrentDay = todayVN;
-    serverFeedClearedAt = Date.now();
-    recentComments.length = 0;
-    if (currentTikTokState) {
-      currentTikTokState.totalCommentsCount = 0;
-      broadcastSSE("status", currentTikTokState);
+  const now = Date.now();
+  // Nếu đã có phiên live và đã trôi qua đúng 24h kể từ phiên live đầu tiên
+  if (serverLiveCycleStartedAt > 0 && (now - serverLiveCycleStartedAt) >= 24 * 60 * 60 * 1000) {
+    // Chỉ tự động xoá nếu trong 30 phút qua không có cmt mới (tránh ngắt phiên đang live dở)
+    const lastCommentTs = recentComments[0]?.ts || 0;
+    if (now - lastCommentTs > 30 * 60 * 1000) {
+      console.log(`[Server] Đã đủ 24h kể từ phiên live đầu tiên (${new Date(serverLiveCycleStartedAt).toLocaleString('vi-VN')}), tự động làm sạch bình luận để đón phiên ngày mới.`);
+      serverLiveCycleStartedAt = 0;
+      serverFeedClearedAt = now;
+      recentComments.length = 0;
+      if (currentTikTokState) {
+        currentTikTokState.totalCommentsCount = 0;
+        broadcastSSE("status", currentTikTokState);
+      }
+      broadcastSSE("clear_comments", { clearedAt: serverFeedClearedAt, reason: "24h_cycle_expired" });
+      const firebaseUrl = "https://spry-shade-365302-default-rtdb.asia-southeast1.firebasedatabase.app";
+      fetch(`${firebaseUrl}/rooms/hienpham_live/comments.json`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          data: [],
+          updatedAt: serverFeedClearedAt,
+          clearedAt: serverFeedClearedAt,
+          deviceId: 'server_24h_cleanup'
+        })
+      }).catch(() => {});
     }
-    broadcastSSE("clear_comments", { date: todayVN, clearedAt: serverFeedClearedAt });
-    const firebaseUrl = "https://spry-shade-365302-default-rtdb.asia-southeast1.firebasedatabase.app";
-    fetch(`${firebaseUrl}/rooms/hienpham_live/comments.json`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        data: [],
-        updatedAt: serverFeedClearedAt,
-        clearedAt: serverFeedClearedAt,
-        deviceId: 'server_midnight_cleanup'
-      })
-    }).catch(() => {});
   }
-}, 15000);
+}, 30000);
 
 async function syncCommentToFirebase(commentObj: any, room: string = "hienpham_live") {
   try {
@@ -123,8 +130,12 @@ async function syncCommentToFirebase(commentObj: any, room: string = "hienpham_l
     if (effectiveClearedAt > 0 && commentTs <= effectiveClearedAt) {
       return; // Bỏ qua bình luận thuộc phiên live cũ đã xoá feed
     }
-    
-    // Add new comment and deduplicate (limit to latest 250 items to keep DB snappy)
+
+    if (!serverLiveCycleStartedAt) {
+      serverLiveCycleStartedAt = commentTs || Date.now();
+    }
+
+    // Add new comment and deduplicate (limit to latest 1000 items to preserve all sessions)
     const list = Array.isArray(currentData.data) ? [...currentData.data] : [];
     const newEntry = {
       id: String(commentObj.id),
@@ -141,8 +152,8 @@ async function syncCommentToFirebase(commentObj: any, room: string = "hienpham_l
     const uniqueList = [newEntry, ...list].filter(item => {
       if (!item || !item.id) return false;
       const itemTs = item.ts || 0;
-      if (itemTs && !isTsFromToday(itemTs)) return false; // Lọc bỏ bình luận ngày cũ
-      if (effectiveClearedAt > 0 && itemTs <= effectiveClearedAt) return false; // Lọc bỏ bình luận phiên trước đã xoá feed
+      if (itemTs && !isTsWithin24h(itemTs)) return false; // Chỉ giữ bình luận trong chu kỳ 24h
+      if (effectiveClearedAt > 0 && itemTs <= effectiveClearedAt) return false; // Lọc bỏ bình luận trước thời điểm xoá feed
       const idStr = String(item.id);
       const cleanUser = String(item.user || '').trim().toLowerCase();
       const cleanText = String(item.content || item.comment || '').trim().toLowerCase();
@@ -155,7 +166,7 @@ async function syncCommentToFirebase(commentObj: any, room: string = "hienpham_l
       return true;
     });
 
-    const trimmed = uniqueList.slice(0, 250);
+    const trimmed = uniqueList.slice(0, 1000);
     await fetch(`${firebaseUrl}/rooms/${room}/comments.json`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -460,6 +471,7 @@ app.get("/api/tiktok/status", (_req, res) => {
 const handleClearFeed = async (req: express.Request, res: express.Response) => {
   const reqClearedAt = Number(req.body?.clearedAt) || Date.now();
   serverFeedClearedAt = Math.max(serverFeedClearedAt, reqClearedAt);
+  serverLiveCycleStartedAt = Date.now();
   recentComments.length = 0;
   currentTikTokState.totalCommentsCount = 0;
   broadcastSSE("status", currentTikTokState);

@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { fbGet, fbPut, DEVICE_ID, PLATFORMS, Platform, printLabel, firebaseDb, getShortId, normalizeUser, extractPriceFromContent, addRecentClosedPrice, parsePriceAndQuantity } from './lib/core';
 import { ref, onValue } from 'firebase/database';
 
+export type { Platform };
+
 export interface OrderItem {
   id: string;
   content: string;
@@ -29,6 +31,8 @@ export interface CommentData {
   avatar?: string;
   ts?: number;
   platform: Platform;
+  sessionId?: string;
+  sessionTitle?: string;
 }
 
 export interface PinnedData {
@@ -108,9 +112,9 @@ export interface AppState {
   initCustomer: (platform: Platform, user: string) => void;
   updateCustomerStats: (platform: Platform, user: string, newCount: number, newTotal: number) => void;
   printNewOrder: (platform: Platform, user: string, content: string, price: number | string, time: string, sourceCommentId: string | null, bypassDebounce?: boolean, skipPrint?: boolean) => void;
-  deleteOrderItem: (platform: Platform, user: string, itemIndex: number, isPast?: boolean) => void;
-  updateOrderItemQuantity: (platform: Platform, user: string, itemIndex: number, newQty: number, isPast?: boolean) => void;
-  updateOrderItemPriceAndQuantity: (platform: Platform, user: string, itemIndex: number, newUnitPrice: number, newQty: number, isPast?: boolean) => void;
+  deleteOrderItem: (platform: Platform, user: string, itemIndex: number, isPast?: boolean, targetItemId?: string) => void;
+  updateOrderItemQuantity: (platform: Platform, user: string, itemIndex: number, newQty: number, isPast?: boolean, targetItemId?: string) => void;
+  updateOrderItemPriceAndQuantity: (platform: Platform, user: string, itemIndex: number, newUnitPrice: number, newQty: number, isPast?: boolean, targetItemId?: string) => void;
   toggleCurrentItemShipped: (platform: Platform, user: string, itemIndex: number, forceState?: boolean) => void;
   markCurrentItemsShipped: (platform: Platform, user: string, itemIndices?: number[], shippedState?: boolean) => void;
   archiveShippedCurrentItems: (platform: Platform, user: string) => void;
@@ -124,7 +128,11 @@ export interface AppState {
   groupCustomerItemsByPrice: (platform: Platform, user: string, isPast?: boolean) => void;
   resetSession: () => void;
   clearFeed: (platform?: Platform) => void;
+  clearPreviousDayLive: () => void;
+  startNewSession: () => void;
   addComment: (platform?: Platform, comment?: CommentData) => void;
+  selectedSessionId: string;
+  setSelectedSessionId: (id: string) => void;
 }
 
 export const getTodayDateKey = (): string => {
@@ -168,13 +176,88 @@ export const setGlobalFeedClearedAt = (ts: number) => {
     } catch {}
 };
 
-export const isCommentFromToday = (ts: number): boolean => {
+/**
+ * Quản lý chu kỳ lưu bình luận 24h tính từ thời điểm mở phiên live đầu tiên trong ngày.
+ * Ví dụ hôm nay live lúc 13h thì lưu tất cả các phiên đến 13h ngày hôm sau.
+ * Nếu chủ live live sớm hơn vào hôm sau, chủ live có thể bấm xoá phiên hôm trước để reset chu kỳ mới.
+ * Nếu không xoá, tự động dọn sạch sau đúng 24h.
+ */
+export const getLiveCycleStartedAt = (): number => {
+    try {
+        const val = localStorage.getItem('slp_live_cycle_started_at');
+        if (val) {
+            const num = Number(val);
+            if (num > 0 && (Date.now() - num) < 24 * 60 * 60 * 1000) {
+                return num;
+            }
+        }
+    } catch {}
+    return 0;
+};
+
+export const setLiveCycleStartedAt = (ts: number = Date.now()) => {
+    try {
+        localStorage.setItem('slp_live_cycle_started_at', String(ts));
+    } catch {}
+};
+
+export const resetLiveCycle = () => {
+    try {
+        localStorage.removeItem('slp_live_cycle_started_at');
+    } catch {}
+};
+
+export const isCommentInActiveLiveCycle = (ts: number): boolean => {
     if (!ts) return false;
-    const cDate = new Date(ts);
-    const now = new Date();
-    return cDate.getFullYear() === now.getFullYear() &&
-           cDate.getMonth() === now.getMonth() &&
-           cDate.getDate() === now.getDate();
+    const now = Date.now();
+    // Giữ bình luận trong vòng 48 giờ để đảm bảo không bị mất bình luận của các phiên live
+    if (now - ts > 48 * 60 * 60 * 1000) return false;
+    return true;
+};
+
+// Giữ lại tên isCommentFromToday để tương thích toàn hệ thống, nhưng áp dụng đúng quy tắc 24h từ phiên live đầu tiên
+export const isCommentFromToday = (ts: number): boolean => {
+    return isCommentInActiveLiveCycle(ts);
+};
+
+export const loadPlatformComments = (p: Platform): CommentData[] => {
+    try {
+        const val = localStorage.getItem(`slp_webapp_comments_${p}`);
+        if (!val) return [];
+        const parsed = JSON.parse(val);
+        if (!Array.isArray(parsed)) return [];
+        const effectiveClearedAt = getFeedClearedAt(p);
+        return parsed.filter(c => {
+            if (!c || !c.ts) return false;
+            if (effectiveClearedAt > 0 && c.ts <= effectiveClearedAt) return false;
+            return isCommentInActiveLiveCycle(c.ts);
+        }).slice(0, 2000);
+    } catch {
+        return [];
+    }
+};
+
+export const savePlatformComments = (p: Platform, comments: CommentData[]) => {
+    try {
+        const toSave = (comments || [])
+            .filter(c => c && c.ts && isCommentInActiveLiveCycle(c.ts))
+            .slice(0, 1500)
+            .map(c => ({
+                id: c.id,
+                user: c.user,
+                content: c.content,
+                avatar: (c.avatar && c.avatar.length < 300) ? c.avatar : '',
+                ts: c.ts,
+                time: c.time,
+                platform: c.platform
+            }));
+        localStorage.setItem(`slp_webapp_comments_${p}`, JSON.stringify(toSave));
+    } catch (e) {
+        try {
+            const trimmed = (comments || []).slice(0, 300);
+            localStorage.setItem(`slp_webapp_comments_${p}`, JSON.stringify(trimmed));
+        } catch {}
+    }
 };
 
 const loadLocal = (key: string, def: any = {}) => {
@@ -375,7 +458,7 @@ const pushTimers: Record<string, any> = {};
 const localLocks: Record<string, number> = {};
 
 const createPlatformState = (p: Platform): PlatformState => ({
-    comments: [],
+    comments: loadPlatformComments(p),
     customers: loadPlatformCustomers(p),
     printed: loadLocal(`slp_webapp_printed_${p}`),
     pinned: loadLocal(`slp_webapp_pinned_${p}`),
@@ -444,6 +527,8 @@ const decodeKeys = (obj: any) => {
         isPolling: false,
         isPrintServer: localStorage.getItem('slp_webapp_printserver') === 'true',
         history: loadLocal('slp_webapp_history', []),
+        selectedSessionId: 'all',
+        setSelectedSessionId: (id: string) => set({ selectedSessionId: id }),
 
         setSyncStatus: (text, color) => set({ syncStatus: { text, color } }),
 
@@ -601,16 +686,18 @@ const decodeKeys = (obj: any) => {
                     merged.sort((a, b) => (b.ts || 0) - (a.ts || 0));
 
                     const detectedFlow = detectHostFlowPrice(merged, state.tags || {});
+                    savePlatformComments(platform, merged);
                     set(s => ({ 
                         [platform]: { 
                             ...s[platform], 
                             lastCommentsAt: data.updatedAt || nowTs, 
-                            comments: merged.slice(0, 250),
+                            comments: merged.slice(0, 2000),
                             ...(detectedFlow ? { flowPrice: detectedFlow } : {})
                         } 
                     }));
                 } else {
                     // Không có bình luận hợp lệ hoặc vừa bấm xoá feed phiên cũ
+                    savePlatformComments(platform, []);
                     set(s => ({ [platform]: { ...s[platform], comments: [], lastCommentsAt: nowTs } }));
                 }
             }, (error) => {
@@ -1249,8 +1336,16 @@ const decodeKeys = (obj: any) => {
             if (unitPrice > 0) {
                 addRecentClosedPrice(unitPrice);
             }
-            if (!newCusts[user]) newCusts[user] = { count: 0, total: 0, lastTime: Date.now(), items: [], pastItems: [] };
-            const cust = newCusts[user];
+            const matchingKey = Object.keys(newCusts).find(k => 
+                k === rawUser || 
+                k === user || 
+                normalizeUser(k) === user || 
+                normalizeUser(k).toLowerCase() === user.toLowerCase() || 
+                k.toLowerCase() === String(rawUser).toLowerCase() || 
+                k.toLowerCase() === user.toLowerCase()
+            ) || user;
+            if (!newCusts[matchingKey]) newCusts[matchingKey] = { count: 0, total: 0, lastTime: Date.now(), items: [], pastItems: [] };
+            const cust = newCusts[matchingKey];
             const existingItems = deduplicateOrderItems(cust.items || []);
 
             const newItemId = `${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
@@ -1267,7 +1362,7 @@ const decodeKeys = (obj: any) => {
 
             const updatedItems = [...existingItems, newItem];
 
-            newCusts[user] = {
+            newCusts[matchingKey] = {
                 ...cust,
                 count: updatedItems.reduce((sum, it) => sum + (it.quantity || 1), 0),
                 total: updatedItems.reduce((sum, it) => sum + (it.price || 0), 0),
@@ -1278,6 +1373,11 @@ const decodeKeys = (obj: any) => {
             set(s => ({ [platform]: { ...s[platform], customers: newCusts, lastCustomersAt: now } }));
             localStorage.setItem(`slp_webapp_session_${platform}`, JSON.stringify(newCusts));
             pushData(platform, 'customers', newCusts, now);
+
+            if (itemData.sourceCommentId) {
+                get().markPrinted(platform, itemData.sourceCommentId);
+                get().unpinComment(platform, itemData.sourceCommentId);
+            }
 
             if (itemData.printNow) {
                 const nickname = get()[platform].nicknames?.[user];
@@ -1292,8 +1392,16 @@ const decodeKeys = (obj: any) => {
             if (!user || !items || items.length === 0) return;
             const state = get()[platform];
             const newCusts = { ...state.customers };
-            if (!newCusts[user]) newCusts[user] = { count: 0, total: 0, lastTime: Date.now(), items: [], pastItems: [] };
-            const cust = newCusts[user];
+            const matchingKey = Object.keys(newCusts).find(k => 
+                k === rawUser || 
+                k === user || 
+                normalizeUser(k) === user || 
+                normalizeUser(k).toLowerCase() === user.toLowerCase() || 
+                k.toLowerCase() === String(rawUser).toLowerCase() || 
+                k.toLowerCase() === user.toLowerCase()
+            ) || user;
+            if (!newCusts[matchingKey]) newCusts[matchingKey] = { count: 0, total: 0, lastTime: Date.now(), items: [], pastItems: [] };
+            const cust = newCusts[matchingKey];
             const existingItems = deduplicateOrderItems(cust.items || []);
 
             const nowTime = Date.now();
@@ -1322,7 +1430,7 @@ const decodeKeys = (obj: any) => {
 
             const updatedItems = [...existingItems, ...createdOrderItems];
 
-            newCusts[user] = {
+            newCusts[matchingKey] = {
                 ...cust,
                 count: updatedItems.reduce((sum, it) => sum + (it.quantity || 1), 0),
                 total: updatedItems.reduce((sum, it) => sum + (it.price || 0), 0),
@@ -1333,6 +1441,13 @@ const decodeKeys = (obj: any) => {
             set(s => ({ [platform]: { ...s[platform], customers: newCusts, lastCustomersAt: now } }));
             localStorage.setItem(`slp_webapp_session_${platform}`, JSON.stringify(newCusts));
             pushData(platform, 'customers', newCusts, now);
+
+            createdOrderItems.forEach(item => {
+                if (item.sourceCommentId) {
+                    get().markPrinted(platform, item.sourceCommentId);
+                    get().unpinComment(platform, item.sourceCommentId);
+                }
+            });
 
             if (printNow) {
                 const nickname = get()[platform].nicknames?.[user];
@@ -1642,76 +1757,130 @@ const decodeKeys = (obj: any) => {
             localStorage.setItem(`slp_webapp_session_${platform}`, JSON.stringify(newCusts));
             pushData(platform, 'customers', newCusts, now);
         },
-        deleteOrderItem: (platform, user, itemIndex, isPast = false) => {
+        deleteOrderItem: (platform, rawUser, itemIndex, isPast = false, targetItemId?: string) => {
+            const user = normalizeUser(rawUser);
             const state = get()[platform];
             const newCusts = { ...state.customers };
-            const cust = newCusts[user];
+            const matchingKey = Object.keys(newCusts).find(k => 
+                k === rawUser || 
+                k === user || 
+                normalizeUser(k) === user || 
+                normalizeUser(k).toLowerCase() === user.toLowerCase() || 
+                k.toLowerCase() === String(rawUser).toLowerCase() || 
+                k.toLowerCase() === user.toLowerCase()
+            ) || user;
+            const cust = newCusts[matchingKey];
             if (!cust) return;
             
             let removedCommentId: string | null = null;
             if (isPast) {
                 const newPast = [...(cust.pastItems || [])];
-                if (!newPast[itemIndex]) return;
-                newPast.splice(itemIndex, 1);
-                newCusts[user] = { ...cust, pastItems: newPast, lastTime: Date.now() };
-            } else {
-                if (!cust.items || !cust.items[itemIndex]) return;
-                const removed = cust.items[itemIndex];
+                let targetIdx = -1;
+                if (targetItemId) {
+                    targetIdx = newPast.findIndex(it => it && (it.id === targetItemId || it.sourceCommentId === targetItemId));
+                }
+                if (targetIdx === -1 && itemIndex >= 0 && itemIndex < newPast.length) {
+                    targetIdx = itemIndex;
+                }
+                if (targetIdx === -1 || !newPast[targetIdx]) return;
+                const removed = newPast[targetIdx];
                 removedCommentId = removed.sourceCommentId;
+                newPast.splice(targetIdx, 1);
+                newCusts[matchingKey] = { ...cust, pastItems: newPast, lastTime: Date.now() };
+            } else {
                 const newItems = [...(cust.items || [])];
-                newItems.splice(itemIndex, 1);
+                let targetIdx = -1;
+                if (targetItemId) {
+                    targetIdx = newItems.findIndex(it => it && (it.id === targetItemId || it.sourceCommentId === targetItemId));
+                }
+                if (targetIdx === -1 && itemIndex >= 0 && itemIndex < newItems.length) {
+                    targetIdx = itemIndex;
+                }
+                if (targetIdx === -1 || !newItems[targetIdx]) return;
+                const removed = newItems[targetIdx];
+                removedCommentId = removed.sourceCommentId;
+                newItems.splice(targetIdx, 1);
                 
                 const newCount = newItems.reduce((sum, it) => sum + (it.quantity || 1), 0);
                 const newTotal = newItems.reduce((sum, it) => sum + (it.price || 0), 0);
                 
-                newCusts[user] = { ...cust, count: newCount, total: newTotal, items: newItems, lastTime: Date.now() };
+                newCusts[matchingKey] = { ...cust, count: newCount, total: newTotal, items: newItems, lastTime: Date.now() };
             }
             
             const now = Date.now();
             set(s => ({ [platform]: { ...s[platform], customers: newCusts, lastCustomersAt: now } }));
             localStorage.setItem(`slp_webapp_session_${platform}`, JSON.stringify(newCusts));
             pushData(platform, 'customers', newCusts, now);
-            if (!isPast && removedCommentId) {
-                get().unmarkPrinted(platform, removedCommentId);
+            if (removedCommentId) {
+                const remainingHasIt = 
+                    (newCusts[matchingKey].items || []).some(it => it?.sourceCommentId === removedCommentId) ||
+                    (newCusts[matchingKey].pastItems || []).some(it => it?.sourceCommentId === removedCommentId);
+                if (!remainingHasIt) {
+                    get().unmarkPrinted(platform, removedCommentId);
+                }
             }
         },
 
-        updateOrderItemQuantity: (platform, rawUser, itemIndex, newQty, isPast = false) => {
+        updateOrderItemQuantity: (platform, rawUser, itemIndex, newQty, isPast = false, targetItemId?: string) => {
             const user = normalizeUser(rawUser);
             const state = get()[platform];
             const newCusts = { ...state.customers };
-            const cust = newCusts[user];
+            const matchingKey = Object.keys(newCusts).find(k => 
+                k === rawUser || 
+                k === user || 
+                normalizeUser(k) === user || 
+                normalizeUser(k).toLowerCase() === user.toLowerCase() || 
+                k.toLowerCase() === String(rawUser).toLowerCase() || 
+                k.toLowerCase() === user.toLowerCase()
+            ) || user;
+            const cust = newCusts[matchingKey];
             if (!cust) return;
 
             if (isPast) {
-                if (!cust.pastItems || !cust.pastItems[itemIndex]) return;
-                const newPast = [...cust.pastItems];
+                const newPast = [...(cust.pastItems || [])];
+                let targetIdx = -1;
+                if (targetItemId) {
+                    targetIdx = newPast.findIndex(it => it && (it.id === targetItemId || it.sourceCommentId === targetItemId));
+                }
+                if (targetIdx === -1 && itemIndex >= 0 && itemIndex < newPast.length) {
+                    targetIdx = itemIndex;
+                }
+                if (targetIdx === -1 || !newPast[targetIdx]) return;
+
                 if (newQty <= 0) {
-                    newPast.splice(itemIndex, 1);
+                    newPast.splice(targetIdx, 1);
                 } else {
-                    const it = newPast[itemIndex];
-                    const unitPrice = it.unitPrice || (it.quantity && it.price ? Math.round(it.price / it.quantity) : it.price);
-                    newPast[itemIndex] = {
+                    const it = newPast[targetIdx];
+                    const unitPrice = it.unitPrice || (it.quantity && it.price ? Math.round(it.price / it.quantity) : it.price) || 0;
+                    newPast[targetIdx] = {
                         ...it,
                         unitPrice,
                         quantity: newQty,
                         price: unitPrice * newQty
                     };
                 }
-                newCusts[user] = { ...cust, pastItems: newPast, lastTime: Date.now() };
+                newCusts[matchingKey] = { ...cust, pastItems: newPast, lastTime: Date.now() };
             } else {
-                if (!cust.items || !cust.items[itemIndex]) return;
-                const newItems = [...cust.items];
+                const newItems = [...(cust.items || [])];
+                let targetIdx = -1;
+                if (targetItemId) {
+                    targetIdx = newItems.findIndex(it => it && (it.id === targetItemId || it.sourceCommentId === targetItemId));
+                }
+                if (targetIdx === -1 && itemIndex >= 0 && itemIndex < newItems.length) {
+                    targetIdx = itemIndex;
+                }
+                if (targetIdx === -1 || !newItems[targetIdx]) return;
+
                 if (newQty <= 0) {
-                    const removed = newItems[itemIndex];
-                    newItems.splice(itemIndex, 1);
+                    const removed = newItems[targetIdx];
+                    newItems.splice(targetIdx, 1);
                     if (removed.sourceCommentId) {
                         get().unmarkPrinted(platform, removed.sourceCommentId);
                     }
                 } else {
-                    const it = newItems[itemIndex];
-                    const unitPrice = it.unitPrice || (it.quantity && it.price ? Math.round(it.price / it.quantity) : it.price);
-                    newItems[itemIndex] = {
+                    const it = newItems[targetIdx];
+                    const unitPrice = it.unitPrice || (it.quantity && it.price ? Math.round(it.price / it.quantity) : it.price) || 0;
+                    newItems[targetIdx] = {
                         ...it,
                         unitPrice,
                         quantity: newQty,
@@ -1720,7 +1889,7 @@ const decodeKeys = (obj: any) => {
                 }
                 const newCount = newItems.reduce((sum, it) => sum + (it.quantity || 1), 0);
                 const newTotal = newItems.reduce((sum, it) => sum + (it.price || 0), 0);
-                newCusts[user] = { ...cust, count: newCount, total: newTotal, items: newItems, lastTime: Date.now() };
+                newCusts[matchingKey] = { ...cust, count: newCount, total: newTotal, items: newItems, lastTime: Date.now() };
             }
 
             const now = Date.now();
@@ -1729,11 +1898,19 @@ const decodeKeys = (obj: any) => {
             pushData(platform, 'customers', newCusts, now);
         },
 
-        updateOrderItemPriceAndQuantity: (platform, rawUser, itemIndex, newUnitPrice, newQty, isPast = false) => {
+        updateOrderItemPriceAndQuantity: (platform, rawUser, itemIndex, newUnitPrice, newQty, isPast = false, targetItemId?: string) => {
             const user = normalizeUser(rawUser);
             const state = get()[platform];
             const newCusts = { ...state.customers };
-            const cust = newCusts[user];
+            const matchingKey = Object.keys(newCusts).find(k => 
+                k === rawUser || 
+                k === user || 
+                normalizeUser(k) === user || 
+                normalizeUser(k).toLowerCase() === user.toLowerCase() || 
+                k.toLowerCase() === String(rawUser).toLowerCase() || 
+                k.toLowerCase() === user.toLowerCase()
+            ) || user;
+            const cust = newCusts[matchingKey];
             if (!cust) return;
 
             const unitPrice = Math.max(0, newUnitPrice);
@@ -1741,27 +1918,43 @@ const decodeKeys = (obj: any) => {
             const totalLinePrice = unitPrice * qty;
 
             if (isPast) {
-                if (!cust.pastItems || !cust.pastItems[itemIndex]) return;
-                const newPast = [...cust.pastItems];
-                newPast[itemIndex] = {
-                    ...newPast[itemIndex],
+                const newPast = [...(cust.pastItems || [])];
+                let targetIdx = -1;
+                if (targetItemId) {
+                    targetIdx = newPast.findIndex(it => it && (it.id === targetItemId || it.sourceCommentId === targetItemId));
+                }
+                if (targetIdx === -1 && itemIndex >= 0 && itemIndex < newPast.length) {
+                    targetIdx = itemIndex;
+                }
+                if (targetIdx === -1 || !newPast[targetIdx]) return;
+
+                newPast[targetIdx] = {
+                    ...newPast[targetIdx],
                     unitPrice,
                     quantity: qty,
                     price: totalLinePrice
                 };
-                newCusts[user] = { ...cust, pastItems: newPast, lastTime: Date.now() };
+                newCusts[matchingKey] = { ...cust, pastItems: newPast, lastTime: Date.now() };
             } else {
-                if (!cust.items || !cust.items[itemIndex]) return;
-                const newItems = [...cust.items];
-                newItems[itemIndex] = {
-                    ...newItems[itemIndex],
+                const newItems = [...(cust.items || [])];
+                let targetIdx = -1;
+                if (targetItemId) {
+                    targetIdx = newItems.findIndex(it => it && (it.id === targetItemId || it.sourceCommentId === targetItemId));
+                }
+                if (targetIdx === -1 && itemIndex >= 0 && itemIndex < newItems.length) {
+                    targetIdx = itemIndex;
+                }
+                if (targetIdx === -1 || !newItems[targetIdx]) return;
+
+                newItems[targetIdx] = {
+                    ...newItems[targetIdx],
                     unitPrice,
                     quantity: qty,
                     price: totalLinePrice
                 };
                 const newCount = newItems.reduce((sum, it) => sum + (it.quantity || 1), 0);
                 const newTotal = newItems.reduce((sum, it) => sum + (it.price || 0), 0);
-                newCusts[user] = { ...cust, count: newCount, total: newTotal, items: newItems, lastTime: Date.now() };
+                newCusts[matchingKey] = { ...cust, count: newCount, total: newTotal, items: newItems, lastTime: Date.now() };
             }
 
             const now = Date.now();
@@ -1774,21 +1967,71 @@ const decodeKeys = (obj: any) => {
             const user = normalizeUser(rawUser);
             if (!user) return;
             const state = get()[platform];
-            const cust = state.customers[user];
-            if (!cust) return;
             const newCusts = { ...state.customers };
+            
+            const matchingKeys = Object.keys(newCusts).filter(k => 
+                k === rawUser || 
+                k === user || 
+                normalizeUser(k) === user || 
+                normalizeUser(k).toLowerCase() === user.toLowerCase() || 
+                k.toLowerCase() === String(rawUser).toLowerCase() || 
+                k.toLowerCase() === user.toLowerCase()
+            );
+
+            if (matchingKeys.length === 0 && !newCusts[user]) return;
+
+            // Collect all sourceCommentIds
+            const commentIdsToClear = new Set<string>();
+            matchingKeys.forEach(k => {
+                const c = newCusts[k];
+                if (c) {
+                    (c.items || []).forEach(it => { if (it?.sourceCommentId) commentIdsToClear.add(it.sourceCommentId); });
+                    (c.pastItems || []).forEach(it => { if (it?.sourceCommentId) commentIdsToClear.add(it.sourceCommentId); });
+                }
+            });
+
+            // Also check comments from this user in state.comments
+            (state.comments || []).forEach(c => {
+                if (c && normalizeUser(c.user) === user && state.printed?.[c.id]) {
+                    commentIdsToClear.add(c.id);
+                }
+            });
+
+            // Wipe out printed flags completely
+            const newPrinted = { ...state.printed };
+            commentIdsToClear.forEach(cid => {
+                delete newPrinted[cid];
+            });
+
             const now = Date.now();
-            newCusts[user] = {
-                ...cust,
-                count: 0,
-                total: 0,
-                items: [],
-                pastItems: [],
-                lastTime: now
-            };
-            set(s => ({ [platform]: { ...s[platform], customers: newCusts, lastCustomersAt: now } }));
+            matchingKeys.forEach(k => {
+                const c = newCusts[k];
+                newCusts[k] = {
+                    ...c,
+                    count: 0,
+                    total: 0,
+                    items: [],
+                    pastItems: [],
+                    lastTime: now
+                };
+            });
+            if (!newCusts[user]) {
+                newCusts[user] = { count: 0, total: 0, items: [], pastItems: [], lastTime: now };
+            }
+
+            set(s => ({ 
+                [platform]: { 
+                    ...s[platform], 
+                    customers: newCusts, 
+                    lastCustomersAt: now,
+                    printed: newPrinted,
+                    lastPrintedAt: now
+                } 
+            }));
             localStorage.setItem(`slp_webapp_session_${platform}`, JSON.stringify(newCusts));
+            localStorage.setItem(`slp_webapp_printed_${platform}`, JSON.stringify(newPrinted));
             pushData(platform, 'customers', newCusts, now);
+            pushData(platform, 'printed', newPrinted, now);
         },
 
         groupCustomerItemsByPrice: (platform, rawUser, isPast = false) => {
@@ -1988,10 +2231,12 @@ const decodeKeys = (obj: any) => {
 
             if (!targetPlatform) {
                 setGlobalFeedClearedAt(now);
+                setLiveCycleStartedAt(now);
             }
 
             platforms.forEach(p => {
                 setFeedClearedAt(p, now);
+                savePlatformComments(p, []);
                 set(s => ({ [p]: { ...s[p], comments: [], lastCommentsAt: now } }));
                 const room = PLATFORMS[p].room;
 
@@ -2019,6 +2264,29 @@ const decodeKeys = (obj: any) => {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ clearedAt: now, platform: targetPlatform || 'all' })
                 }).catch(() => {});
+            } catch {}
+        },
+
+        clearPreviousDayLive: () => {
+            const now = Date.now();
+            try {
+                localStorage.removeItem('slp_manual_session_breaks');
+            } catch {}
+            (['tiktok', 'facebook', 'shopee'] as Platform[]).forEach(p => {
+                savePlatformComments(p, []);
+            });
+            setGlobalFeedClearedAt(now);
+            setLiveCycleStartedAt(now);
+            get().clearFeed();
+        },
+
+        startNewSession: () => {
+            const now = Date.now();
+            try {
+                const val = localStorage.getItem('slp_manual_session_breaks');
+                const parsed = val ? JSON.parse(val) : [];
+                const updated = Array.isArray(parsed) ? [...parsed, now] : [now];
+                localStorage.setItem('slp_manual_session_breaks', JSON.stringify(updated));
             } catch {}
         },
 
@@ -2054,7 +2322,7 @@ const decodeKeys = (obj: any) => {
                 avatar: cleanAvatar,
                 ts: commentTs
             };
-            const updated = [normalizedComment, ...prev].slice(0, 300);
+            const updated = [normalizedComment, ...prev].slice(0, 2000);
             
             // TÍNH NĂNG FLOW GIÁ: Bắt giá tự động khi nick HOST gắn vương miện bình luận có giá
             const isHost = state.tags && state.tags[cleanUser] === 'HOST';
@@ -2075,6 +2343,7 @@ const decodeKeys = (obj: any) => {
                 }
             }
 
+            savePlatformComments(platform, updated);
             set(s => ({ [platform]: { ...s[platform], comments: updated, lastCommentsAt: now, flowPrice: newFlowPrice } }));
             pushData(platform, 'comments', updated, now);
         }

@@ -206,20 +206,26 @@ export function getClosedPriceForComment(
 ): string | null {
     if (!customers || !userName || !commentId) return null;
     const clean = normalizeUser(userName);
-    const cust = customers[clean];
+    const matchingKey = Object.keys(customers).find(k => 
+        k === clean || 
+        normalizeUser(k) === clean || 
+        k.toLowerCase() === clean.toLowerCase() || 
+        normalizeUser(k).toLowerCase() === clean.toLowerCase()
+    );
+    const cust = matchingKey ? customers[matchingKey] : customers[clean];
     if (!cust) return null;
 
     if (Array.isArray(cust.items)) {
-        const currentMatches = cust.items.filter((it: any) => it.sourceCommentId === commentId);
+        const currentMatches = cust.items.filter((it: any) => it && it.sourceCommentId === commentId);
         if (currentMatches.length > 0) {
-            return currentMatches.map((it: any) => `${it.price}k`).join(' + ');
+            return currentMatches.map((it: any) => (it.price && it.price > 0) ? `${it.price}k` : 'Ko giá').join(' + ');
         }
     }
 
     if (Array.isArray(cust.pastItems)) {
-        const pastMatches = cust.pastItems.filter((it: any) => it.sourceCommentId === commentId);
+        const pastMatches = cust.pastItems.filter((it: any) => it && it.sourceCommentId === commentId);
         if (pastMatches.length > 0) {
-            return pastMatches.map((it: any) => `${it.price}k`).join(' + ');
+            return pastMatches.map((it: any) => (it.price && it.price > 0) ? `${it.price}k` : 'Ko giá').join(' + ');
         }
     }
 

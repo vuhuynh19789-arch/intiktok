@@ -4,7 +4,7 @@ import React, { useEffect, useState, useMemo, useRef, useCallback, useDeferredVa
 import { MoreVertical, Search as SearchIcon, Home, MessageSquare, Users, PlusCircle, Maximize, Trash2, RefreshCw, Bot, ShoppingCart, BarChart3, Radio, Tv } from 'lucide-react';
 import { useStore, getCustomerAvatar } from './store';
 import { PLATFORMS, Platform, getShortId, normalizeUser, addRecentSearchPrice, extractPriceFromContent, removeVietnameseAccents } from './lib/core';
-import { SearchBar } from './components/SearchBar';
+import { SearchBar, SearchSuggestionItem } from './components/SearchBar';
 import { PriceModal, ManualModal, ListModal, ProfileModal, CustomersModal, LiveEfficiencyModal } from './components/Modals';
 import { MinigameModal } from './components/Minigame';
 import { AutoCommentModal, useAutoComment } from './components/AutoComment';
@@ -50,7 +50,13 @@ export default function App() {
       return <PrintServer />;
   }
   const store = useStore();
-  const [search, setSearch] = useState('');
+  const [tabSearches, setTabSearches] = useState<Record<number, string>>({
+      0: '',
+      1: '',
+      2: '',
+      3: '',
+      4: ''
+  });
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [windowHeight, setWindowHeight] = useState(window.innerHeight);
@@ -269,58 +275,7 @@ export default function App() {
   }, []);
 
 
-  // Intercept system back button & edge swipe gesture globally so swiping back on mobile phone never closes the app when a modal is open!
-  const hasAnyModalOpen = Boolean(
-    activeModal ||
-    profileUser ||
-    pancakeModalUser ||
-    showTikTokLiveModal ||
-    showFacebookLiveModal ||
-    showClearFeedModal ||
-    showResetSessionModal ||
-    showPancakeSyncModal ||
-    showSmartLiveMonitor ||
-    pendingPrint
-  );
 
-  useEffect(() => {
-    if (!hasAnyModalOpen) return;
-
-    try {
-      window.history.pushState({ appModalOpen: true }, '');
-    } catch {}
-
-    const handlePopState = () => {
-      // Close top-level modal in order of depth
-      if (pendingPrint) setPendingPrint(null);
-      else if (pancakeModalUser) setPancakeModalUser(null);
-      else if (profileUser) setProfileUser(null);
-      else if (activeModal) setActiveModal(null);
-      else if (showTikTokLiveModal) setShowTikTokLiveModal(false);
-      else if (showFacebookLiveModal) setShowFacebookLiveModal(false);
-      else if (showPancakeSyncModal) setShowPancakeSyncModal(false);
-      else if (showClearFeedModal) setShowClearFeedModal(false);
-      else if (showResetSessionModal) setShowResetSessionModal(false);
-      else if (showSmartLiveMonitor) setShowSmartLiveMonitor(false);
-    };
-
-    window.addEventListener('popstate', handlePopState);
-    return () => {
-      window.removeEventListener('popstate', handlePopState);
-    };
-  }, [
-    hasAnyModalOpen,
-    pendingPrint,
-    pancakeModalUser,
-    profileUser,
-    activeModal,
-    showTikTokLiveModal,
-    showFacebookLiveModal,
-    showPancakeSyncModal,
-    showClearFeedModal,
-    showResetSessionModal,
-    showSmartLiveMonitor
-  ]);
 
   // Đảm bảo không tự động xoá dữ liệu chốt đơn khi mở máy hoặc sang ngày mới
   // Mọi thao tác reset phiên chốt đơn PHẢI do người dùng chủ động bấm trong modal ResetSessionModal
@@ -359,117 +314,188 @@ export default function App() {
     totalRevenue += platformStats[p].r;
   });
 
-  const allCustomersIndex = useMemo(() => {
-      const list: Array<{
-          user: string;
-          cleanUser: string;
-          userLower: string;
-          userNoAccent: string;
-          nick: string;
-          nickLower: string;
-          nickNoAccent: string;
-          shortId: string;
-          platform: Platform;
-          data: any;
-          tag: string;
-          lastTime: number;
-      }> = [];
-
-      (['tiktok', 'facebook', 'shopee'] as Platform[]).forEach(p => {
-          const pStore = store[p];
-          if (!pStore || !pStore.customers) return;
-          Object.entries(pStore.customers as Record<string, any>).forEach(([user, data]) => {
-              const clean = normalizeUser(user);
-              const nick = pStore.nicknames?.[user] || '';
-              list.push({
-                  user,
-                  cleanUser: clean,
-                  userLower: user.toLowerCase(),
-                  userNoAccent: removeVietnameseAccents(user).toLowerCase(),
-                  nick,
-                  nickLower: nick.toLowerCase(),
-                  nickNoAccent: removeVietnameseAccents(nick).toLowerCase(),
-                  shortId: getShortId(user).toLowerCase(),
-                  platform: p,
-                  data,
-                  tag: pStore.tags?.[user] || 'NORMAL',
-                  lastTime: (data as any)?.lastTime || 0
-              });
-          });
-      });
-      return list;
-  }, [store.tiktok.customers, store.facebook.customers, store.shopee.customers, store.tiktok.nicknames, store.facebook.nicknames, store.shopee.nicknames, store.tiktok.tags, store.facebook.tags, store.shopee.tags]);
-
-  const quickResults = useMemo(() => {
-      const rawKw = search.trim();
-      const keyword = rawKw.toLowerCase();
-      const isDefault = !keyword && isSearchFocused;
-      if (!keyword && !isSearchFocused) return { items: [], title: '' };
-
-      const kwNoAccent = removeVietnameseAccents(keyword);
-      let matches: any[] = [];
-      let platformsToSearch: Platform[] = ['tiktok', 'facebook', 'shopee'];
-      let topCount = 10;
-      let isCommand = false;
-      let title = `👤 Khách đã chốt khớp "${rawKw}"`;
-
-      if (keyword === '/top10' || isDefault) {
-          isCommand = true;
-          topCount = 10;
-          title = "👤 TOP 10 KHÁCH CHỐT GẦN NHẤT";
-      } else if (keyword === '/cam') {
-          isCommand = true;
-          topCount = 10;
-          platformsToSearch = ['shopee'];
-          title = "👤 Top 10 khách chốt sàn Shopee";
-      } else if (keyword === '/tik') {
-          isCommand = true;
-          topCount = 10;
-          platformsToSearch = ['tiktok'];
-          title = "👤 Top 10 khách chốt sàn TikTok";
-      } else if (keyword === '/face') {
-          isCommand = true;
-          topCount = 10;
-          platformsToSearch = ['facebook'];
-          title = "👤 Top 10 khách chốt sàn Facebook";
+  const tabSearchContext = useMemo(() => {
+      switch (activeTab) {
+          case 0:
+              return {
+                  badge: '💬 Chat Live',
+                  badgeColor: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40',
+                  placeholder: 'Tìm nội dung cmt, tên khách trên Live... (hoặc /top10)'
+              };
+          case 1:
+              return {
+                  badge: '🛒 Giỏ hàng',
+                  badgeColor: 'bg-blue-500/20 text-blue-300 border-blue-500/40',
+                  placeholder: 'Tìm giỏ hàng theo tên khách, #id, tên món chốt...'
+              };
+          case 2:
+              return {
+                  badge: '👥 Khách hàng',
+                  badgeColor: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
+                  placeholder: 'Tìm khách hàng theo tên, biệt danh, #id, SĐT...'
+              };
+          case 3:
+              return {
+                  badge: '📊 Hiệu quả',
+                  badgeColor: 'bg-purple-500/20 text-purple-300 border-purple-500/40',
+                  placeholder: 'Tìm số liệu khách trong bảng hiệu quả...'
+              };
+          case 4:
+              return {
+                  badge: '✍️ Tạo mới',
+                  badgeColor: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
+                  placeholder: 'Nhập tên khách để tìm hoặc tạo mới...'
+              };
+          default:
+              return {
+                  badge: '🔍 Tìm',
+                  badgeColor: 'bg-white/10 text-gray-300 border-white/20',
+                  placeholder: 'Tìm kiếm...'
+              };
       }
+  }, [activeTab]);
 
-      const isIdSearch = keyword.startsWith('#') || /^\d+$/.test(keyword);
-      const cleanId = keyword.startsWith('#') ? keyword.slice(1) : keyword;
+  const currentSearch = tabSearches[activeTab] || '';
 
-      for (const item of allCustomersIndex) {
-          if (!platformsToSearch.includes(item.platform)) continue;
-
-          if (isDefault || isCommand) {
-              matches.push(item);
-          } else if (isIdSearch) {
-              if (item.shortId === cleanId || ('#' + item.shortId) === keyword) {
-                  matches.push(item);
-              }
+  const handleSearchChange = useCallback((val: string) => {
+      setTabSearches(prev => ({ ...prev, [activeTab]: val }));
+      if (val.trim()) {
+          const numMatch = val.trim().match(/^(\d+)\s*(k|ka|ca|cành)?$/i);
+          if (numMatch && parseInt(numMatch[1], 10) >= 5) {
+              addRecentSearchPrice(numMatch[1]);
           } else {
-              if (
-                  item.userLower.includes(keyword) ||
-                  item.userNoAccent.includes(kwNoAccent) ||
-                  item.nickLower.includes(keyword) ||
-                  item.nickNoAccent.includes(kwNoAccent)
-              ) {
-                  matches.push(item);
+              const extracted = extractPriceFromContent(val);
+              if (extracted.price && parseInt(extracted.price, 10) >= 5) {
+                  addRecentSearchPrice(extracted.price);
               }
           }
       }
+  }, [activeTab]);
 
-      matches.sort((a, b) => (b.lastTime || 0) - (a.lastTime || 0));
-      if (isDefault || isCommand) {
-          matches = matches.slice(0, topCount);
-      } else {
-          matches = matches.slice(0, 25);
+  const handleClearSearch = useCallback(() => {
+      setTabSearches(prev => ({ ...prev, [activeTab]: '' }));
+      setIsSearchFocused(false);
+  }, [activeTab]);
+
+  const handleSelectSuggestion = useCallback((item: SearchSuggestionItem) => {
+      // Chỉ load và lọc theo trang hiện tại đang đứng
+      setTabSearches(prev => ({ ...prev, [activeTab]: item.user }));
+      setIsSearchFocused(false);
+  }, [activeTab]);
+
+  // Tìm kiếm gợi ý khách hàng y hệt như ô tìm tên ở mục Tạo mới
+  const searchSuggestions = useMemo(() => {
+      const raw = currentSearch.trim();
+      if (!raw || raw.startsWith('/')) return [];
+      const keyword = raw.toLowerCase();
+      const kwNoAccent = removeVietnameseAccents(keyword);
+      const isIdSearch = keyword.startsWith('#') || /^\d+$/.test(keyword);
+      const targetId = keyword.startsWith('#') ? keyword.slice(1) : keyword;
+
+      const results: SearchSuggestionItem[] = [];
+      const seenUsers = new Set<string>();
+
+      (['tiktok', 'facebook', 'shopee'] as Platform[]).forEach(p => {
+          const pStore = store[p];
+          if (!pStore) return;
+          const custs = pStore.customers || {};
+          const nicks = pStore.nicknames || {};
+          const tags = pStore.tags || {};
+
+          Object.entries(custs).forEach(([rawUser, data]) => {
+              const clean = normalizeUser(rawUser);
+              const dedupeKey = `${p}_${clean.toLowerCase()}`;
+              if (seenUsers.has(dedupeKey)) return;
+
+              const nick = nicks[clean] || nicks[rawUser] || '';
+              const tag = tags[clean] || tags[rawUser] || 'NORMAL';
+              const shortId = getShortId(clean).toLowerCase();
+              const userLower = clean.toLowerCase();
+              const userNoAccent = removeVietnameseAccents(userLower);
+              const nickLower = nick.toLowerCase();
+              const nickNoAccent = removeVietnameseAccents(nickLower);
+
+              let match = false;
+              if (isIdSearch) {
+                  if (shortId === targetId || ('#' + shortId) === keyword || shortId.includes(targetId)) {
+                      match = true;
+                  }
+              } else {
+                  if (
+                      userLower.includes(keyword) ||
+                      userNoAccent.includes(kwNoAccent) ||
+                      nickLower.includes(keyword) ||
+                      nickNoAccent.includes(kwNoAccent)
+                  ) {
+                      match = true;
+                  }
+              }
+
+              if (match) {
+                  seenUsers.add(dedupeKey);
+                  results.push({
+                      user: clean,
+                      nickname: nick,
+                      shortId,
+                      platform: p,
+                      tag,
+                      count: (data as any)?.count || 0,
+                      total: (data as any)?.total || 0,
+                      lastTime: (data as any)?.lastTime || 0
+                  });
+              }
+          });
+      });
+
+      // Nếu đang ở tab Chat Live, tìm thêm cả khách đang bình luận trên live
+      if (activeTab === 0) {
+          (['tiktok', 'facebook', 'shopee'] as Platform[]).forEach(p => {
+              const pStore = store[p];
+              if (!pStore || !pStore.comments) return;
+              pStore.comments.slice(0, 100).forEach(c => {
+                  if (!c || !c.user) return;
+                  const clean = normalizeUser(c.user);
+                  const dedupeKey = `${p}_${clean.toLowerCase()}`;
+                  if (seenUsers.has(dedupeKey)) return;
+
+                  const shortId = getShortId(clean).toLowerCase();
+                  const userLower = clean.toLowerCase();
+                  const userNoAccent = removeVietnameseAccents(userLower);
+
+                  let match = false;
+                  if (isIdSearch) {
+                      if (shortId === targetId || ('#' + shortId) === keyword || shortId.includes(targetId)) {
+                          match = true;
+                      }
+                  } else {
+                      if (userLower.includes(keyword) || userNoAccent.includes(kwNoAccent)) {
+                          match = true;
+                      }
+                  }
+
+                  if (match) {
+                      seenUsers.add(dedupeKey);
+                      results.push({
+                          user: clean,
+                          nickname: pStore.nicknames?.[clean] || '',
+                          shortId,
+                          platform: p,
+                          tag: pStore.tags?.[clean] || 'NORMAL',
+                          count: pStore.customers?.[clean]?.count || 0,
+                          total: pStore.customers?.[clean]?.total || 0,
+                          lastTime: Number(c.ts) || 0
+                      });
+                  }
+              });
+          });
       }
 
-      return { items: matches, title };
-  }, [search, isSearchFocused, allCustomersIndex]);
+      results.sort((a, b) => (b.lastTime || 0) - (a.lastTime || 0));
+      return results.slice(0, 8);
+  }, [currentSearch, activeTab, store.tiktok.customers, store.facebook.customers, store.shopee.customers, store.tiktok.nicknames, store.facebook.nicknames, store.shopee.nicknames, store.tiktok.tags, store.facebook.tags, store.shopee.tags, store.tiktok.comments, store.facebook.comments, store.shopee.comments]);
 
   return (
-    <div className="max-w-[720px] mx-auto bg-[#0e1621] flex flex-col relative overflow-hidden" style={{ height: windowHeight }}>
+    <div className="w-full max-w-5xl xl:max-w-6xl mx-auto bg-[#0e1621] flex flex-col relative overflow-hidden shadow-2xl" style={{ height: windowHeight }}>
         {/* Header */}
         <div className="bg-[#1c242f] text-white py-2 shrink-0 z-50 shadow-md border-b border-white/5">
             {/* Main Header Bar */}
@@ -601,24 +627,16 @@ export default function App() {
                 </div>
             </div>
 
-            {/* Search Bar under Stats - Permanently visible, instant access */}
+            {/* Search Bar under Stats - Instant access & Contextual for active tab */}
             <div className="px-3 pt-2 pb-1">
                 <SearchBar
-                    value={search}
-                    onSearchChange={(val) => {
-                        setSearch(val);
-                        if (val.trim()) {
-                            const numMatch = val.trim().match(/^(\d+)\s*(k|ka|ca|cành)?$/i);
-                            if (numMatch && parseInt(numMatch[1], 10) >= 5) {
-                                addRecentSearchPrice(numMatch[1]);
-                            } else {
-                                const extracted = extractPriceFromContent(val);
-                                if (extracted.price && parseInt(extracted.price, 10) >= 5) {
-                                    addRecentSearchPrice(extracted.price);
-                                }
-                            }
-                        }
-                    }}
+                    value={currentSearch}
+                    badgeLabel={tabSearchContext.badge}
+                    badgeColorClass={tabSearchContext.badgeColor}
+                    placeholder={tabSearchContext.placeholder}
+                    suggestions={searchSuggestions}
+                    onSelectSuggestion={handleSelectSuggestion}
+                    onSearchChange={handleSearchChange}
                     isFocused={isSearchFocused}
                     onFocus={() => {
                         setIsSearchFocused(true);
@@ -626,18 +644,47 @@ export default function App() {
                     onBlur={() => {
                         setTimeout(() => {
                             setIsSearchFocused(false);
-                        }, 250);
+                        }, 200);
                     }}
-                    onClear={() => {
-                        setSearch('');
-                        setIsSearchFocused(false);
-                    }}
+                    onClear={handleClearSearch}
                 />
             </div>
+
+            {/* Contextual Search Status & Cross-tab Query Suggestion */}
+            {(() => {
+                const otherTabWithSearch = Object.entries(tabSearches).find(([tabIdx, str]) => Number(tabIdx) !== activeTab && str && str.trim());
+                if (!currentSearch && otherTabWithSearch) {
+                    const [prevTabIdx, prevTerm] = otherTabWithSearch;
+                    return (
+                        <div className="mx-3 mb-1 px-3 py-1 flex items-center justify-between text-xs bg-blue-950/60 border border-blue-500/30 rounded-xl text-gray-300 animate-in fade-in duration-150">
+                            <span className="flex items-center gap-1.5 truncate">
+                                <span className="text-blue-400">💡</span>
+                                <span className="truncate">Áp dụng tìm <strong className="text-white">"{prevTerm}"</strong> cho {tabSearchContext.badge}?</span>
+                            </span>
+                            <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                                <button
+                                    onClick={() => handleSearchChange(prevTerm)}
+                                    className="px-2 py-0.5 bg-blue-600 hover:bg-blue-500 text-white rounded text-[11px] font-bold cursor-pointer transition-colors"
+                                >
+                                    Lọc trang này
+                                </button>
+                                <button
+                                    onClick={() => setTabSearches(prev => ({ ...prev, [Number(prevTabIdx)]: '' }))}
+                                    className="px-1 text-gray-400 hover:text-white rounded text-xs cursor-pointer"
+                                    title="Bỏ qua"
+                                >
+                                    ✕
+                                </button>
+                            </div>
+                        </div>
+                    );
+                }
+                return null;
+            })()}
         </div>
 
-        {/* Quick Results / Commands Overlay across all tabs */}
-        {search.startsWith('/') && COMMANDS.filter(c => c.cmd.startsWith(search.toLowerCase()) && c.cmd !== search.toLowerCase()).length > 0 ? (
+        {/* Quick Commands Overlay - Only shows autocomplete when typing slash commands like /top10 */}
+        {currentSearch.startsWith('/') && COMMANDS.filter(c => c.cmd.startsWith(currentSearch.toLowerCase()) && c.cmd !== currentSearch.toLowerCase()).length > 0 ? (
             <div 
                 onMouseDown={(e) => e.preventDefault()}
                 className="bg-[#1c242f] border-b border-white/10 z-50 absolute w-full shadow-2xl transition-all duration-200 bottom-[58px] overflow-y-auto top-[96px] sm:top-[98px]"
@@ -648,119 +695,23 @@ export default function App() {
                     </span>
                     <button 
                         onMouseDown={(e) => e.preventDefault()}
-                        onClick={() => { setSearch(''); setIsSearchFocused(false); }} 
+                        onClick={handleClearSearch} 
                         className="text-xs text-gray-400 hover:text-white cursor-pointer px-2 py-1 rounded hover:bg-white/5"
                     >
                         Đóng
                     </button>
                 </div>
-                {COMMANDS.filter(c => c.cmd.startsWith(search.toLowerCase()) && c.cmd !== search.toLowerCase()).map((c, idx) => (
+                {COMMANDS.filter(c => c.cmd.startsWith(currentSearch.toLowerCase()) && c.cmd !== currentSearch.toLowerCase()).map((c, idx) => (
                     <div 
                         key={idx} 
                         className="flex items-center gap-3 px-4 py-3 border-t border-white/5 cursor-pointer hover:bg-white/5 transition-colors"
                         onMouseDown={(e) => e.preventDefault()}
-                        onClick={() => { setSearch(c.cmd); document.querySelector('input')?.focus(); }}
+                        onClick={() => { handleSearchChange(c.cmd); document.querySelector('input')?.focus(); }}
                     >
                         <span className="bg-blue-500/20 text-blue-400 px-2 py-1 rounded-lg font-bold text-xs border border-blue-500/30">{c.cmd}</span>
                         <span className="text-sm font-medium text-gray-300">{c.desc}</span>
                     </div>
                 ))}
-            </div>
-        ) : (isSearchFocused || search) && quickResults.items.length > 0 ? (
-            <div 
-                onMouseDown={(e) => e.preventDefault()}
-                className="bg-[#1c242f] border-b border-white/10 z-50 absolute w-full shadow-2xl overflow-y-auto transition-all duration-200 bottom-[58px] top-[96px] sm:top-[98px]"
-            >
-                <div className="sticky top-0 z-10 flex items-center justify-between px-4 pt-3 pb-2 border-b border-white/5 bg-[#131d2a]">
-                    <span className="text-[11px] font-bold text-[#ffca28] uppercase tracking-wider">
-                        {quickResults.title}
-                    </span>
-                    <button 
-                        onMouseDown={(e) => e.preventDefault()}
-                        onClick={() => { setSearch(''); setIsSearchFocused(false); }} 
-                        className="text-xs text-gray-400 hover:text-white cursor-pointer px-2 py-1 rounded hover:bg-white/5"
-                    >
-                        Đóng
-                    </button>
-                </div>
-                <div className="divide-y divide-white/5 pb-4">
-                    {quickResults.items.map((m, idx) => {
-                        const cleanUser = normalizeUser(m.user);
-                        const avatarUrl = getCustomerAvatar(cleanUser, m.platform as Platform);
-                        const nickname = store[m.platform as Platform].nicknames?.[cleanUser];
-                        const displayName = nickname ? `${cleanUser} (${nickname})` : cleanUser;
-                        const pLink = store[m.platform as Platform].pancakeLinks?.[cleanUser];
-                        return (
-                        <div key={idx} className="flex items-center justify-between px-4 py-3 hover:bg-white/5 transition-colors">
-                            <div className="flex items-center gap-3 flex-1 min-w-0 pr-2">
-                                <CustomerAvatar 
-                                    user={cleanUser} 
-                                    platform={m.platform as Platform} 
-                                    avatarUrl={avatarUrl}
-                                    tag={m.tag || 'NORMAL'}
-                                    size="md"
-                                    onClick={() => { setProfileUser({user: cleanUser, platform: m.platform}); setActiveModal('profile'); setIsSearchFocused(false); }}
-                                />
-                                <div 
-                                    onClick={() => { setProfileUser({user: cleanUser, platform: m.platform}); setActiveModal('profile'); setIsSearchFocused(false); }}
-                                    className="cursor-pointer flex-1 min-w-0"
-                                >
-                                    <div className="flex items-center gap-1.5 flex-wrap">
-                                        <span className="text-[11px] font-mono font-bold text-gray-400 bg-black/40 px-1.5 py-0.5 rounded border border-white/10 shrink-0">
-                                            #{getShortId(cleanUser)}
-                                        </span>
-                                        <span className="text-[15px] font-bold text-white truncate">
-                                            {displayName}
-                                        </span>
-                                    </div>
-                                    <div className="text-[12px] text-gray-400 mt-1 flex items-center">
-                                        Đã chốt: 
-                                        <span className="font-bold text-blue-400 ml-1.5">
-                                            {m.data.count} cái <span className="text-gray-500 font-normal mx-0.5">-</span> {m.data.total}k
-                                        </span>
-                                    </div>
-                                </div>
-                            </div>
-                            <div className="flex items-center gap-2 shrink-0">
-                                <button 
-                                    type="button"
-                                    onMouseDown={(e) => e.preventDefault()}
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        if (pLink) {
-                                            openPancakeApp(pLink, true);
-                                        } else {
-                                            setPancakeModalUser({ user: cleanUser, platform: m.platform as Platform });
-                                        }
-                                        setIsSearchFocused(false);
-                                    }}
-                                    className={`px-2.5 py-1.5 text-xs font-bold rounded-xl shrink-0 transition-all flex items-center gap-1 cursor-pointer shadow-sm active:scale-95 ${
-                                        pLink 
-                                            ? 'bg-orange-950/80 hover:bg-orange-900/90 text-orange-400 border border-orange-500/40 shadow-orange-950/40' 
-                                            : 'bg-orange-950/35 hover:bg-orange-950/60 text-orange-300/90 border border-orange-500/25'
-                                    }`}
-                                    title={pLink ? "Mở trực tiếp hội thoại chat Pancake / Zalo" : "Liên kết Pancake / Zalo cho khách này"}
-                                >
-                                    <span className="text-sm leading-none">🥞</span>
-                                    <span className="font-bold text-[11px]">Pancake</span>
-                                </button>
-                                <button 
-                                    type="button"
-                                    onMouseDown={(e) => e.preventDefault()}
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        setPendingPrint({id: null, user: cleanUser, platform: m.platform as Platform}); 
-                                        setActiveModal('price'); 
-                                        setIsSearchFocused(false);
-                                    }}
-                                    className="bg-emerald-950/60 hover:bg-emerald-900/60 active:scale-95 text-emerald-400 border border-emerald-500/30 rounded-xl px-3 py-1.5 text-xs font-bold shrink-0 transition-all flex items-center gap-1 cursor-pointer shadow-sm"
-                                >
-                                    <PlusCircle size={15} /> Mới
-                                </button>
-                            </div>
-                        </div>
-                    );})}
-                </div>
             </div>
         ) : null}
 
@@ -794,7 +745,7 @@ export default function App() {
             <div className="w-full shrink-0 snap-center h-full flex flex-col relative overflow-hidden">
                 <ErrorBoundary>
                     <Feed 
-                        searchKeyword={isSearchFocused ? '' : search} 
+                        searchKeyword={tabSearches[0] || ''} 
                         hostMode={hostMode} 
                         onOpenPrice={(id, user, platform, defaultPrice) => {
                             setPendingPrint({ id, user, platform, defaultPrice });
@@ -817,7 +768,7 @@ export default function App() {
                 <ListModal 
                     isPage={true}
                     filterPlatform={listFilter} 
-                    searchKeyword={isSearchFocused ? '' : search} 
+                    searchKeyword={tabSearches[1] || ''} 
                     onClose={() => {}} 
                     onOpenProfile={(u, p) => { 
                         setProfileUser({ user: u, platform: p }); 
@@ -839,7 +790,7 @@ export default function App() {
             <div className="w-full shrink-0 snap-center h-full bg-transparent relative overflow-hidden">
                 <CustomersModal 
                     isPage={true}
-                    searchKeyword={isSearchFocused ? '' : search} 
+                    searchKeyword={tabSearches[2] || ''} 
                     onClose={() => {}} 
                     onOpenProfile={(u, p) => { 
                         setProfileUser({ user: u, platform: p }); 
@@ -860,6 +811,7 @@ export default function App() {
             <div className="w-full shrink-0 snap-center h-full bg-transparent relative overflow-hidden">
                 <LiveEfficiencyModal 
                     isPage={true}
+                    searchKeyword={tabSearches[3] || ''}
                     onClose={() => {}} 
                     onOpenProfile={(u, p) => { 
                         setProfileUser({ user: u, platform: p }); 
@@ -877,6 +829,7 @@ export default function App() {
             <div className="w-full shrink-0 snap-center h-full bg-transparent relative overflow-hidden">
                 <ManualModal 
                     isPage={true}
+                    initialSearch={tabSearches[4] || ''}
                     onClose={() => {}} 
                     onOpenProfile={(u, p) => { setProfileUser({user: u, platform: p}); setActiveModal('profile'); }} 
                 />
@@ -953,12 +906,27 @@ export default function App() {
         
         
         
-        {activeModal === 'price' && pendingPrint && <PriceModal pendingPrint={pendingPrint} onClose={() => setActiveModal(null)} />}
+        {activeModal === 'price' && pendingPrint && (
+            <PriceModal 
+                pendingPrint={pendingPrint} 
+                onClose={() => {
+                    setPendingPrint(null);
+                    if (profileUser) {
+                        setActiveModal('profile');
+                    } else {
+                        setActiveModal(null);
+                    }
+                }} 
+            />
+        )}
         {activeModal === 'profile' && profileUser && (
             <ProfileModal 
                 user={profileUser.user} 
                 platform={profileUser.platform} 
-                onClose={() => setActiveModal(null)} 
+                onClose={() => {
+                    setProfileUser(null);
+                    setActiveModal(null);
+                }} 
                 onOpenPrice={(id, u, p) => {
                     setPendingPrint({ id, user: u, platform: p });
                     setActiveModal('price');

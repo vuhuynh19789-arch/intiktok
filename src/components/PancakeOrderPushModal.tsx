@@ -31,8 +31,9 @@ import { useStore, OrderItem } from '../store';
 import { Platform, PLATFORMS, getShortId, normalizeUser, printBill } from '../lib/core';
 import { CustomerAvatar } from './UserAvatar';
 import { ItemCalculatorModal, ParsedCalculatorItem } from './ItemCalculatorModal';
-import { openPancakeApp, parsePancakeContact } from '../lib/pancakeDeepLink';
+import { openPancakeApp, parsePancakeContact, extractPhoneFromText } from '../lib/pancakeDeepLink';
 import { useSwipeToDismiss } from '../lib/useSwipeToDismiss';
+import { PriceIncrementButton } from './Modals';
 import { 
   getCustomerInsight, 
   fetchRecentZaloConversations, 
@@ -81,7 +82,16 @@ export const PancakeOrderPushModal: React.FC<PancakeOrderPushModalProps> = ({
   onClose,
   onSuccess
 }) => {
-  const { modalStyle, touchHandlers } = useSwipeToDismiss({ onClose, enabled: isOpen });
+  const [showZaloPicker, setShowZaloPicker] = useState(false);
+  const [isCalculatorOpen, setIsCalculatorOpen] = useState(false);
+  const [pickingVarForIdx, setPickingVarForIdx] = useState<number | null>(null);
+
+  const isChildOpen = Boolean(isCalculatorOpen || showZaloPicker || pickingVarForIdx !== null);
+  const { modalStyle, touchHandlers } = useSwipeToDismiss({ 
+    onClose, 
+    enabled: isOpen && !isChildOpen,
+    registerBack: isOpen 
+  });
   const store = useStore();
   const cleanUser = normalizeUser(user);
   const cust = store[platform].customers[cleanUser];
@@ -93,11 +103,7 @@ export const PancakeOrderPushModal: React.FC<PancakeOrderPushModalProps> = ({
   const [insight, setInsight] = useState(() => getCustomerInsight(cleanUser));
   const [isSearchingZalo, setIsSearchingZalo] = useState(false);
   const [zaloConvs, setZaloConvs] = useState<ZaloInboxConversation[]>([]);
-  const [showZaloPicker, setShowZaloPicker] = useState(false);
   const [zaloSearchQuery, setZaloSearchQuery] = useState('');
-
-  // Item Calculator Modal
-  const [isCalculatorOpen, setIsCalculatorOpen] = useState(false);
 
   // Editable items state
   const [orderItems, setOrderItems] = useState<EditablePushItem[]>([]);
@@ -106,7 +112,6 @@ export const PancakeOrderPushModal: React.FC<PancakeOrderPushModalProps> = ({
   // Shop variations from Pancake POS
   const [shopVariations, setShopVariations] = useState<PancakeVariation[]>([]);
   const [isLoadingVariations, setIsLoadingVariations] = useState(false);
-  const [pickingVarForIdx, setPickingVarForIdx] = useState<number | null>(null);
   const [variationSearchQuery, setVariationSearchQuery] = useState('');
 
   const [customNote, setCustomNote] = useState<string>('');
@@ -410,9 +415,21 @@ export const PancakeOrderPushModal: React.FC<PancakeOrderPushModalProps> = ({
         }
       }
       if (!detectedPhone) {
-        const phoneRegex = /(?:0|\+?84)(?:3|5|7|8|9)\d{8}/;
-        const nickMatch = (nickname || '').match(phoneRegex);
-        if (nickMatch && !isShopPhone(nickMatch[0])) detectedPhone = nickMatch[0];
+        const fromNick = extractPhoneFromText(nickname || '');
+        if (fromNick && !isShopPhone(fromNick)) detectedPhone = fromNick;
+      }
+      if (!detectedPhone) {
+        // Kiểm tra trong nội dung các bình luận của khách
+        const cust = store[platform].customers?.[cleanUser];
+        if (cust?.items) {
+          for (const item of cust.items) {
+            const p = extractPhoneFromText(item.content || '');
+            if (p && !isShopPhone(p)) {
+              detectedPhone = p;
+              break;
+            }
+          }
+        }
       }
 
       setRecipientName(currentInsight?.matchedName || nickname || cleanUser);
@@ -1053,17 +1070,30 @@ export const PancakeOrderPushModal: React.FC<PancakeOrderPushModalProps> = ({
                                 />
                               </div>
 
-                              <div className="text-right shrink-0">
-                                <span className="font-mono font-black text-base sm:text-lg text-white tracking-tight">
-                                  {itemTotalVnd.toLocaleString('vi-VN')}
-                                </span>
-                                <span className="text-xs text-gray-400 font-normal ml-0.5">đ</span>
-                              </div>
+                              <PriceIncrementButton
+                                customLabel={`${itemTotalVnd.toLocaleString('vi-VN')}đ`}
+                                quantity={itemQty}
+                                onClick={() => {
+                                  handleQuantityChange(idx, 1);
+                                  if (typeof navigator !== 'undefined' && navigator.vibrate) {
+                                    try { navigator.vibrate(12); } catch {}
+                                  }
+                                }}
+                              />
                             </div>
 
                             {/* Dòng 2: Công thức [SL x Đơn giá] (Trái) & Thao tác (Phải) */}
                             <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-white/5 pl-6">
-                              <div className="text-xs sm:text-sm font-medium text-gray-400 font-mono flex items-center gap-1.5">
+                              <div 
+                                onClick={() => {
+                                  handleQuantityChange(idx, 1);
+                                  if (typeof navigator !== 'undefined' && navigator.vibrate) {
+                                    try { navigator.vibrate(12); } catch {}
+                                  }
+                                }}
+                                title="Bấm vào giá để tăng số lượng (+1)"
+                                className="text-xs sm:text-sm font-medium text-gray-400 hover:text-cyan-300 font-mono flex items-center gap-1.5 cursor-pointer select-none transition-colors"
+                              >
                                 <span>{itemQty} x {itemUnitPriceVnd.toLocaleString('vi-VN')}</span>
                                 <span className="text-[10px] text-gray-500 font-sans">({itemUnitPrice}k/cái)</span>
                               </div>

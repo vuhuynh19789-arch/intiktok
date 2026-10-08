@@ -356,18 +356,45 @@ export function openPancakeApp(input: string, openFallbackPrompt = false): void 
 
 /**
  * Trích xuất số điện thoại Việt Nam từ văn bản bình luận
+ * Hỗ trợ các định dạng: 09xx, 03xx, 07xx, 08xx, 05xx, +84, 84
+ * Hỗ trợ có dấu cách, dấu chấm, dấu gạch nối (ví dụ: 0987.654.321, 098 765 4321)
+ * Hỗ trợ lách kiểm duyệt (dùng chữ o/O thay cho số 0 ở đầu)
  */
 export function extractPhoneFromText(text: string): string | null {
-    if (!text) return null;
-    // Tìm các chuỗi SĐT có dạng 09xx, 03xx, 07xx, 08xx, 05xx, hoặc +84... (có thể chứa dấu chấm hoặc khoảng trắng)
-    const match = text.match(/(?:(?:\+|00)?84|0)(?:3[2-9]|5[25689]|7[06-9]|8[1-9]|9[0-9])[0-9\s\.\-]{7,10}\b/);
-    if (!match) return null;
-    const clean = match[0].replace(/[\s\.\-]/g, '');
-    if (clean.length >= 10 && clean.length <= 11) {
-        if (clean.startsWith('84')) return '0' + clean.substring(2);
-        if (clean.startsWith('+84')) return '0' + clean.substring(3);
-        if (clean.startsWith('0084')) return '0' + clean.substring(4);
-        return clean;
+    if (!text || typeof text !== 'string') return null;
+    
+    // 1. Chuẩn hoá chữ cái o/O thay cho số 0 (người xem live thường gõ o98..., O9...)
+    const normalized = text.replace(/([oO])(?=[35789]\d{7,9})/g, '0');
+
+    // 2. Tìm SĐT có tiền tố chuẩn Việt Nam: 0 hoặc (+84 / 84 / 0084), theo sau là đầu số 3, 5, 7, 8, 9 và 8 chữ số
+    // Cho phép khoảng trắng, dấu chấm, gạch ngang xen giữa
+    const standardMatch = normalized.match(/(?:(?:\+|00)?84|0)[\s\.\-]*(?:[35789])(?:[\s\.\-]*\d){8}(?!\d)/);
+    if (standardMatch && standardMatch[0]) {
+        let clean = standardMatch[0].replace(/[\s\.\-\+]/g, '');
+        if (clean.startsWith('0084')) clean = '0' + clean.slice(4);
+        else if (clean.startsWith('84')) clean = '0' + clean.slice(2);
+        if (clean.length === 10 && clean.startsWith('0')) {
+            return clean;
+        }
     }
+
+    // 3. Tìm chuỗi 10 số liền nhau bắt đầu bằng 0
+    const tenDigitsMatch = normalized.match(/\b0[35789]\d{8}\b/);
+    if (tenDigitsMatch) {
+        return tenDigitsMatch[0];
+    }
+
+    // 4. Fallback tìm dãy số cách nhau bởi dấu cách/chấm nếu gom lại đúng 10 số đầu 0
+    const numberTokens = normalized.match(/[0-9\s\.\-]{10,20}/g);
+    if (numberTokens) {
+        for (const token of numberTokens) {
+            let digits = token.replace(/[\s\.\-]/g, '');
+            if (digits.startsWith('84') && digits.length === 11) digits = '0' + digits.slice(2);
+            if (digits.length === 10 && /^0[35789]\d{8}$/.test(digits)) {
+                return digits;
+            }
+        }
+    }
+
     return null;
 }

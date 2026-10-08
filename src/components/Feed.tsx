@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useMemo, useRef, memo, useCallback } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useStore, CommentData, getFeedClearedAt, getGlobalFeedClearedAt } from '../store';
-import { PLATFORMS, extractPriceFromContent, Platform, getShortId, normalizeUser, getClosedPriceForComment } from '../lib/core';
+import { PLATFORMS, extractPriceFromContent, Platform, getShortId, normalizeUser, getClosedPriceForComment, removeVietnameseAccents } from '../lib/core';
 import { openPancakeApp, extractPhoneFromText } from '../lib/pancakeDeepLink';
 import { getCustomerInsight, getOrderStatusLabel } from '../lib/pancakeSync';
 import { CopyButton } from './Modals';
 import { CustomerAvatar } from './UserAvatar';
-import { PlusCircle, Edit3, Users, List, ChevronDown, ChevronUp, MessageSquare, LayoutGrid, Pin } from 'lucide-react';
+import { PlusCircle, Edit3, Users, List, ChevronDown, ChevronUp, MessageSquare, LayoutGrid, Pin, Printer, RefreshCw } from 'lucide-react';
 import { QuickAssignModal } from './QuickAssignModal';
 
 interface FeedProps {
@@ -76,6 +76,7 @@ const SubCommentRow = memo(function SubCommentRow({
     const detectedPhone = extractPhoneFromText(contentStr);
     const extracted = extractPriceFromContent(contentStr);
     const closedPriceStr = getClosedPriceForComment(pStore.customers, userName, c.id);
+    const pancakeLink = pStore.pancakeLinks?.[userName];
     const isLatest = index === 0;
 
     return (
@@ -108,7 +109,7 @@ const SubCommentRow = memo(function SubCommentRow({
                     onClick={() => onOpenPrice(c.id, userName, c.platform, extracted.price || closedPriceStr?.replace(/k/g, '') || undefined)}
                     className="text-red-300 hover:text-red-200 font-bold break-words mt-1 cursor-pointer text-sm"
                 >
-                    <span>{contentStr}</span>
+                    <span className="line-clamp-3 break-words inline-block max-w-full">{contentStr}</span>
                     {extracted.price ? (
                         <span className="ml-1.5 bg-emerald-500/20 text-emerald-300 text-[10px] font-black px-1.5 py-0.2 rounded border border-emerald-500/40 inline-flex items-center gap-0.5">
                             🏷️ {extracted.price}k
@@ -136,7 +137,20 @@ const SubCommentRow = memo(function SubCommentRow({
                 )}
             </div>
 
-            <div className="shrink-0 flex items-center gap-1">
+            <div className="shrink-0 flex items-center gap-1.5 sm:gap-2">
+                {pancakeLink ? (
+                    <button
+                        type="button"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            openPancakeApp(pancakeLink, true);
+                        }}
+                        title="🥞 Mở Zalo/Pancake"
+                        className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg bg-orange-600 hover:bg-orange-500 text-white font-bold flex items-center justify-center text-xs cursor-pointer shadow-xs active:scale-95 transition-all border border-orange-400/40"
+                    >
+                        <span>🥞</span>
+                    </button>
+                ) : null}
                 <button
                     type="button"
                     onClick={(e) => {
@@ -144,7 +158,7 @@ const SubCommentRow = memo(function SubCommentRow({
                         onTogglePin(c.platform, c.id, userName);
                     }}
                     title={isCommentPinned ? "Bỏ ghim bình luận này" : "Ghim bình luận này lên đầu"}
-                    className={`p-1 text-xs rounded transition-all cursor-pointer ${
+                    className={`p-1.5 text-xs rounded-lg transition-all cursor-pointer ${
                         isCommentPinned
                             ? 'bg-red-500 text-white font-bold shadow-xs'
                             : 'bg-white/10 text-gray-400 hover:bg-white/20 hover:text-white'
@@ -155,11 +169,12 @@ const SubCommentRow = memo(function SubCommentRow({
                 <button
                     disabled={isBusy}
                     onClick={(e) => onPrint(c, e)}
-                    className={`w-12 h-6 rounded text-xs font-bold text-white flex items-center justify-center transition-all active:scale-95 cursor-pointer ${
+                    className={`h-8 sm:h-9 min-w-[50px] px-2 rounded-lg text-xs font-bold text-white flex items-center justify-center gap-1 transition-all active:scale-95 cursor-pointer shadow-xs ${
                         isBusy ? 'bg-gray-500' : count > 0 ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'
                     }`}
                 >
-                    {count === 0 ? 'IN' : `(${count})`}
+                    <Printer size={13} />
+                    <span>{count === 0 ? 'IN' : `(${count})`}</span>
                 </button>
             </div>
         </div>
@@ -225,7 +240,7 @@ const UserGroupRow = memo(function UserGroupRow({
                         user={userName} 
                         platform={g.platform} 
                         avatarUrl={g.avatar}
-                        tag={userTag}
+                        tag={isHost ? 'HOST' : userTag}
                         size={isPinned ? 'lg' : 'md'}
                         onClick={() => onOpenProfile(userName, g.platform)}
                     />
@@ -233,14 +248,9 @@ const UserGroupRow = memo(function UserGroupRow({
 
                 <div className="flex-1 overflow-hidden min-w-0">
                     <div className="flex items-center flex-wrap gap-y-1">
-                        {isHost && (
-                            <span className="bg-gradient-to-r from-yellow-500 to-amber-600 text-white text-[9px] font-black px-1.5 py-0.5 rounded mr-1 flex items-center gap-0.5 whitespace-nowrap shadow-sm">
-                                👑 HOST
-                            </span>
-                        )}
                         <b 
                             onClick={() => onOpenProfile(userName, g.platform)}
-                            className={`text-gray-100 cursor-pointer hover:underline truncate max-w-[180px] sm:max-w-xs ${isPinned ? 'text-lg' : 'text-base'}`}>
+                            className={`text-gray-100 cursor-pointer hover:underline truncate max-w-[200px] xs:max-w-[280px] sm:max-w-[420px] md:max-w-[620px] lg:max-w-[850px] xl:max-w-none ${isPinned ? 'text-lg sm:text-xl' : 'text-base sm:text-[17px]'}`}>
                             {displayName}
                         </b>
                         <CopyButton text={displayName} className="text-xs px-1" />
@@ -302,7 +312,7 @@ const UserGroupRow = memo(function UserGroupRow({
                         onClick={() => onOpenPrice(latestC.id, userName, g.platform, extracted.price || latestClosedPriceStr?.replace(/k/g, '') || undefined)}
                         className={`text-red-400 font-bold break-words mt-1 cursor-pointer flex items-center gap-1.5 flex-wrap ${isPinned ? 'text-lg' : 'text-sm'}`}
                     >
-                        <span>{latestContentStr}</span>
+                        <span className="line-clamp-3 break-words inline-block max-w-full">{latestContentStr}</span>
 
                         {/* Interactive Dropdown Button Pill on comment line */}
                         <button
@@ -384,20 +394,21 @@ const UserGroupRow = memo(function UserGroupRow({
                     )}
                 </div>
 
-                {/* Action Buttons Column */}
-                <div className="flex flex-col gap-1.5 shrink-0 ml-1">
+                {/* Action Buttons: Nằm ngang, nút in to hình vuông dễ bấm, đồng bộ với nút Zalo */}
+                <div className="flex items-center gap-2 sm:gap-2.5 shrink-0 ml-1.5 self-center sm:self-start">
+                    {/* Nút Zalo / Pancake (Hình vuông) */}
                     {pancakeLink ? (
-                        <div className="relative flex items-center">
+                        <div className="relative flex items-center shrink-0">
                             <button
                                 onClick={(e) => {
                                     e.stopPropagation();
                                     openPancakeApp(pancakeLink, true);
                                 }}
                                 title="🥞 Đã nối Zalo/Pancake (Bấm mở chat ngay)"
-                                className="w-14 h-7 rounded-md text-[11px] bg-orange-600 hover:bg-orange-500 text-white font-bold flex items-center justify-center gap-0.5 transition-all cursor-pointer shadow-sm active:scale-95"
+                                className="w-11 h-11 sm:w-12 sm:h-12 md:w-14 md:h-14 rounded-xl bg-orange-600 hover:bg-orange-500 text-white font-bold flex flex-col items-center justify-center transition-all cursor-pointer shadow-md active:scale-95 border border-orange-400/40 shadow-orange-950/40"
                             >
-                                <span>🥞</span>
-                                <span className="truncate">Zalo</span>
+                                <span className="text-base sm:text-lg md:text-xl leading-none">🥞</span>
+                                <span className="text-[10px] sm:text-[11px] md:text-[12px] font-black leading-none mt-0.5">Zalo</span>
                             </button>
                             <button
                                 onClick={(e) => {
@@ -409,9 +420,9 @@ const UserGroupRow = memo(function UserGroupRow({
                                     }
                                 }}
                                 title="Sửa Link hoặc SĐT Zalo"
-                                className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-[#111722] border border-orange-400/60 text-orange-300 hover:text-white flex items-center justify-center text-[9px] shadow cursor-pointer hover:scale-110 transition-transform"
+                                className="absolute -top-1.5 -right-1.5 w-4.5 h-4.5 sm:w-5 sm:h-5 rounded-full bg-[#111722] border border-orange-400/80 text-orange-300 hover:text-white flex items-center justify-center text-[10px] shadow-sm cursor-pointer hover:scale-110 transition-transform"
                             >
-                                <Edit3 size={9} />
+                                <Edit3 size={10} />
                             </button>
                         </div>
                     ) : (
@@ -425,21 +436,39 @@ const UserGroupRow = memo(function UserGroupRow({
                                 }
                             }}
                             title="🥞 Gán Zalo / Pancake (Chọn khách đang inbox)"
-                            className="w-14 h-7 rounded-md text-[11px] bg-amber-500/20 hover:bg-amber-500/35 border border-amber-500/50 text-amber-300 font-bold flex items-center justify-center gap-0.5 transition-all cursor-pointer active:scale-95 shadow-sm"
+                            className="w-11 h-11 sm:w-12 sm:h-12 md:w-14 md:h-14 rounded-xl bg-amber-500/20 hover:bg-amber-500/35 border border-amber-500/50 text-amber-300 font-bold flex flex-col items-center justify-center transition-all cursor-pointer active:scale-95 shadow-sm shrink-0"
                         >
-                            <span>🥞+</span>
-                            <span className="truncate">Gán</span>
+                            <span className="text-base sm:text-lg md:text-xl leading-none">🥞</span>
+                            <span className="text-[10px] sm:text-[11px] md:text-[12px] font-bold leading-none mt-0.5">Gán</span>
                         </button>
                     )}
+
+                    {/* Nút IN: To, hình vuông, dễ bấm trên tablet */}
                     <button 
                         disabled={!!busyPrints[latestC.id]}
                         onClick={(e) => onPrint(latestC, e)}
-                        className={`w-14 h-7 rounded-md text-[13px] font-bold text-white flex items-center justify-center gap-1 transition-all active:scale-95 cursor-pointer ${
-                            busyPrints[latestC.id] ? 'bg-gray-400' : latestCount > 0 ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'
+                        className={`w-11 h-11 sm:w-12 sm:h-12 md:w-14 md:h-14 rounded-xl font-bold text-white flex flex-col items-center justify-center transition-all active:scale-95 cursor-pointer shadow-md shrink-0 ${
+                            busyPrints[latestC.id] 
+                                ? 'bg-gray-600 border border-gray-500 opacity-75' 
+                                : latestCount > 0 
+                                ? 'bg-emerald-600 hover:bg-emerald-500 border border-emerald-400/50 shadow-emerald-950/50 ring-1 ring-emerald-400/30' 
+                                : 'bg-blue-600 hover:bg-blue-500 border border-blue-400/40 shadow-blue-950/50'
                         }`}
-                        title="In cmt mới nhất"
+                        title={latestCount > 0 ? `Đã in ${latestCount} lần (Bấm để in lại)` : "In cmt mới nhất"}
                     >
-                        {latestCount === 0 ? 'IN' : `(${latestCount})`}
+                        {busyPrints[latestC.id] ? (
+                            <RefreshCw size={18} className="animate-spin" />
+                        ) : latestCount > 0 ? (
+                            <>
+                                <Printer size={16} className="sm:size-[18px] opacity-95" />
+                                <span className="text-[12px] sm:text-[13px] md:text-[14px] font-black leading-none mt-0.5">({latestCount})</span>
+                            </>
+                        ) : (
+                            <>
+                                <Printer size={16} className="sm:size-[18px]" />
+                                <span className="text-[11px] sm:text-[12px] md:text-[13px] font-black tracking-wider leading-none mt-0.5">IN</span>
+                            </>
+                        )}
                     </button>
                 </div>
             </div>
@@ -526,21 +555,16 @@ const CommentRow = memo(function CommentRow({
                     user={userName} 
                     platform={c.platform} 
                     avatarUrl={c.avatar}
-                    tag={userTag}
+                    tag={isHost ? 'HOST' : userTag}
                     size={isPinned ? 'lg' : 'md'}
                     onClick={() => onOpenProfile(userName, c.platform)}
                 />
             </div>
             <div className="flex-1 overflow-hidden min-w-0">
                 <div className="flex items-center flex-wrap gap-y-1">
-                    {isHost && (
-                        <span className="bg-gradient-to-r from-yellow-500 to-amber-600 text-white text-[9px] font-black px-1.5 py-0.5 rounded mr-1 flex items-center gap-0.5 whitespace-nowrap shadow-sm">
-                            👑 HOST
-                        </span>
-                    )}
                     <b 
                         onClick={() => onOpenProfile(userName, c.platform)}
-                        className={`text-gray-100 cursor-pointer hover:underline truncate max-w-[200px] sm:max-w-xs ${isPinned ? 'text-lg' : 'text-base'}`}>
+                        className={`text-gray-100 cursor-pointer hover:underline truncate max-w-[200px] xs:max-w-[280px] sm:max-w-[420px] md:max-w-[620px] lg:max-w-[850px] xl:max-w-none ${isPinned ? 'text-lg sm:text-xl' : 'text-base sm:text-[17px]'}`}>
                         {displayName}
                     </b>
                     <CopyButton text={displayName} className="text-xs px-1" />
@@ -598,7 +622,7 @@ const CommentRow = memo(function CommentRow({
                     onClick={() => onOpenPrice(c.id, userName, c.platform, extracted.price || closedPriceStr?.replace(/k/g, '') || undefined)}
                     className={`text-red-400 font-bold break-words mt-1 cursor-pointer flex items-center gap-2 flex-wrap ${isPinned ? 'text-lg' : 'text-sm'}`}
                 >
-                    <span>{contentStr}</span>
+                    <span className="line-clamp-3 break-words inline-block max-w-full">{contentStr}</span>
                     {isHost && extracted.price && (
                         <span className="bg-yellow-500/20 border border-yellow-500/50 text-yellow-300 text-[11px] font-black px-1.5 py-0.5 rounded inline-flex items-center gap-1 shadow-xs">
                             👑 Host ra giá: {extracted.price}k
@@ -651,19 +675,21 @@ const CommentRow = memo(function CommentRow({
                 )}
             </div>
 
-            <div className="flex flex-col gap-1.5 shrink-0 ml-1">
+            {/* Action Buttons: Nằm ngang, nút in to hình vuông dễ bấm, đồng bộ với nút Zalo */}
+            <div className="flex items-center gap-2 sm:gap-2.5 shrink-0 ml-1.5 self-center sm:self-start">
+                {/* Nút Zalo / Pancake (Hình vuông) */}
                 {pancakeLink ? (
-                    <div className="relative flex items-center">
+                    <div className="relative flex items-center shrink-0">
                         <button
                             onClick={(e) => {
                                 e.stopPropagation();
                                 openPancakeApp(pancakeLink, true);
                             }}
                             title="🥞 Đã nối Zalo/Pancake (Bấm mở chat ngay)"
-                            className="w-14 h-7 rounded-md text-[11px] bg-orange-600 hover:bg-orange-500 text-white font-bold flex items-center justify-center gap-0.5 transition-all cursor-pointer shadow-sm active:scale-95"
+                            className="w-11 h-11 sm:w-12 sm:h-12 md:w-14 md:h-14 rounded-xl bg-orange-600 hover:bg-orange-500 text-white font-bold flex flex-col items-center justify-center transition-all cursor-pointer shadow-md active:scale-95 border border-orange-400/40 shadow-orange-950/40"
                         >
-                            <span>🥞</span>
-                            <span className="truncate">Zalo</span>
+                            <span className="text-base sm:text-lg md:text-xl leading-none">🥞</span>
+                            <span className="text-[10px] sm:text-[11px] md:text-[12px] font-black leading-none mt-0.5">Zalo</span>
                         </button>
                         <button
                             onClick={(e) => {
@@ -675,9 +701,9 @@ const CommentRow = memo(function CommentRow({
                                 }
                             }}
                             title="Sửa Link hoặc SĐT Zalo"
-                            className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-[#111722] border border-orange-400/60 text-orange-300 hover:text-white flex items-center justify-center text-[9px] shadow cursor-pointer hover:scale-110 transition-transform"
+                            className="absolute -top-1.5 -right-1.5 w-4.5 h-4.5 sm:w-5 sm:h-5 rounded-full bg-[#111722] border border-orange-400/80 text-orange-300 hover:text-white flex items-center justify-center text-[10px] shadow-sm cursor-pointer hover:scale-110 transition-transform"
                         >
-                            <Edit3 size={9} />
+                            <Edit3 size={10} />
                         </button>
                     </div>
                 ) : (
@@ -691,17 +717,39 @@ const CommentRow = memo(function CommentRow({
                             }
                         }}
                         title="🥞 Gán Zalo / Pancake (Chọn khách đang inbox)"
-                        className="w-14 h-7 rounded-md text-[11px] bg-amber-500/20 hover:bg-amber-500/35 border border-amber-500/50 text-amber-300 font-bold flex items-center justify-center gap-0.5 transition-all cursor-pointer active:scale-95 shadow-sm"
+                        className="w-11 h-11 sm:w-12 sm:h-12 md:w-14 md:h-14 rounded-xl bg-amber-500/20 hover:bg-amber-500/35 border border-amber-500/50 text-amber-300 font-bold flex flex-col items-center justify-center transition-all cursor-pointer active:scale-95 shadow-sm shrink-0"
                     >
-                        <span>🥞+</span>
-                        <span className="truncate">Gán</span>
+                        <span className="text-base sm:text-lg md:text-xl leading-none">🥞</span>
+                        <span className="text-[10px] sm:text-[11px] md:text-[12px] font-bold leading-none mt-0.5">Gán</span>
                     </button>
                 )}
+
+                {/* Nút IN: To, hình vuông, dễ bấm trên tablet */}
                 <button 
                     disabled={isBusy}
                     onClick={(e) => onPrint(c, e)}
-                    className={`w-14 h-7 rounded-md text-[13px] font-bold text-white flex items-center justify-center gap-1 transition-all active:scale-95 cursor-pointer ${isBusy ? 'bg-gray-400' : count > 0 ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'}`}>
-                    {count === 0 ? 'IN' : `(${count})`}
+                    className={`w-11 h-11 sm:w-12 sm:h-12 md:w-14 md:h-14 rounded-xl font-bold text-white flex flex-col items-center justify-center transition-all active:scale-95 cursor-pointer shadow-md shrink-0 ${
+                        isBusy 
+                            ? 'bg-gray-600 border border-gray-500 opacity-75' 
+                            : count > 0 
+                            ? 'bg-emerald-600 hover:bg-emerald-500 border border-emerald-400/50 shadow-emerald-950/50 ring-1 ring-emerald-400/30' 
+                            : 'bg-blue-600 hover:bg-blue-500 border border-blue-400/40 shadow-blue-950/50'
+                    }`}
+                    title={count > 0 ? `Đã in ${count} lần (Bấm để in lại)` : "In cmt mới nhất"}
+                >
+                    {isBusy ? (
+                        <RefreshCw size={18} className="animate-spin" />
+                    ) : count > 0 ? (
+                        <>
+                            <Printer size={16} className="sm:size-[18px] opacity-95" />
+                            <span className="text-[12px] sm:text-[13px] md:text-[14px] font-black leading-none mt-0.5">({count})</span>
+                        </>
+                    ) : (
+                        <>
+                            <Printer size={16} className="sm:size-[18px]" />
+                            <span className="text-[11px] sm:text-[12px] md:text-[13px] font-black tracking-wider leading-none mt-0.5">IN</span>
+                        </>
+                    )}
                 </button>
             </div>
         </div>
@@ -891,26 +939,34 @@ export const Feed = memo(function Feed({
 
         let items = baseDeduplicatedComments;
 
-        // Keyword filter
+        // Keyword filter: searches customer comment content, username, nickname, #id with & without Vietnamese accents
         if (keyword) {
             const isIdQuery = keyword.startsWith('#') || /^\d+$/.test(keyword);
             const targetId = keyword.startsWith('#') ? keyword.slice(1) : keyword;
+            const kwNoAccent = removeVietnameseAccents(keyword);
 
             items = items.filter(c => {
                 const pStore = store[c.platform] || store.tiktok;
                 const userLower = (c as any)._ul || ((c as any)._ul = c.user.toLowerCase());
+                const userNoAccent = (c as any)._una || ((c as any)._una = removeVietnameseAccents(userLower));
                 const nick = pStore.nicknames?.[c.user] || '';
                 const nickLower = nick ? ((c as any)._nl || ((c as any)._nl = nick.toLowerCase())) : '';
+                const nickNoAccent = nickLower ? ((c as any)._nna || ((c as any)._nna = removeVietnameseAccents(nickLower))) : '';
                 const shortId = (c as any)._sid || ((c as any)._sid = getShortId(c.user).toLowerCase());
-                const contentLower = (c as any)._cl || ((c as any)._cl = (typeof c.content === 'object' ? JSON.stringify(c.content) : String(c.content || '')).toLowerCase());
+                const contentRaw = typeof c.content === 'object' ? JSON.stringify(c.content) : String(c.content || '');
+                const contentLower = (c as any)._cl || ((c as any)._cl = contentRaw.toLowerCase());
+                const contentNoAccent = (c as any)._cna || ((c as any)._cna = removeVietnameseAccents(contentLower));
 
                 if (isIdQuery) {
-                    return shortId === targetId || ('#' + shortId) === keyword;
+                    if (shortId === targetId || ('#' + shortId) === keyword) return true;
                 }
 
-                return userLower.includes(keyword) || 
-                       contentLower.includes(keyword) || 
-                       (nickLower && nickLower.includes(keyword));
+                // Check match with or without accents across content, user, and nickname
+                const matchContent = contentLower.includes(keyword) || contentNoAccent.includes(kwNoAccent);
+                const matchUser = userLower.includes(keyword) || userNoAccent.includes(kwNoAccent);
+                const matchNick = (nickLower && nickLower.includes(keyword)) || (nickNoAccent && nickNoAccent.includes(kwNoAccent));
+
+                return matchContent || matchUser || matchNick;
             });
         }
 
@@ -1181,9 +1237,13 @@ export const Feed = memo(function Feed({
     if (displayList.length === 0) {
         return (
             <div className="flex-1 flex flex-col items-center justify-center text-center text-gray-400 py-16 px-4 bg-[#0e1621]">
-                <div className="text-3xl mb-2">💬</div>
-                <div className="text-sm font-medium">Đang đợi dữ liệu bình luận từ Live...</div>
-                <div className="text-xs text-gray-500 mt-1">Bình luận mới từ TikTok sẽ tự động hiển thị tại đây</div>
+                <div className="text-3xl mb-2">{keyword ? '🔍' : '💬'}</div>
+                <div className="text-sm font-bold text-white">
+                    {keyword ? `Không tìm thấy bình luận nào khớp với "${searchKeyword}"` : 'Đang đợi dữ liệu bình luận từ Live...'}
+                </div>
+                <div className="text-xs text-gray-400 mt-1">
+                    {keyword ? 'Thử tìm theo từ khóa cmt khác, tên khách, hoặc mã số #id' : 'Bình luận mới từ TikTok và Facebook sẽ tự động hiển thị tại đây'}
+                </div>
             </div>
         );
     }
@@ -1194,6 +1254,19 @@ export const Feed = memo(function Feed({
             className="flex-1 overflow-y-auto bg-[#0e1621] will-change-scroll relative" 
             onScroll={handleScroll}
         >
+            {/* Thanh hiển thị kết quả tìm kiếm trực tiếp trên Chat Live */}
+            {keyword && (
+                <div className="sticky top-0 z-30 bg-cyan-950/90 border-b border-cyan-500/40 px-3 py-1.5 flex items-center justify-between text-xs text-cyan-200 backdrop-blur-sm shadow-sm">
+                    <span className="flex items-center gap-1.5 font-bold truncate">
+                        <span>💬</span>
+                        <span>Tìm thấy <strong className="text-white font-black text-sm">{displayList.length}</strong> bình luận khớp "{searchKeyword}"</span>
+                    </span>
+                    <span className="text-[10px] text-cyan-300 font-medium px-2 py-0.5 rounded-full bg-cyan-900/60 border border-cyan-500/30 shrink-0">
+                        Đang lọc trên Live
+                    </span>
+                </div>
+            )}
+
             {/* Mode Switcher & Display Filter Toolbar */}
             <div className="sticky top-0 z-20 bg-[#131d28]/95 backdrop-blur-md border-b border-white/10 px-3 py-2 flex items-center justify-between gap-2 shadow-sm">
                 <div className="flex items-center gap-1.5">
@@ -1285,7 +1358,7 @@ export const Feed = memo(function Feed({
                                 >
                                     <UserGroupRow 
                                         group={g}
-                                        isExpanded={!!expandedGroups[g.key]}
+                                        isExpanded={Boolean(expandedGroups[g.key] || (keyword && !isTagSearch))}
                                         onToggleExpand={toggleExpandGroup}
                                         now={now}
                                         busyPrints={busyPrints}

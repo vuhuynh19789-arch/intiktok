@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { PlusCircle, Plus, Clipboard, Smartphone, Phone, MapPin, ShoppingBag, Package, Sparkles, RefreshCw, ChevronDown, ChevronUp, Calendar, Truck, ExternalLink, Edit3, LayoutGrid, List, Calculator, Minus, Printer, Trash2, Check, RotateCcw, Hash, Tag, Receipt } from 'lucide-react';
 import { useStore, CustomerData, OrderItem, deduplicateOrderItems, getCustomerAvatar } from '../store';
-import { PLATFORMS, printLabel, printBill, getShortId, Platform, normalizeUser, getLastClosedPrice, getRecentSearchPrices, getRecentClosedPrices } from '../lib/core';
+import { PLATFORMS, printLabel, printBill, getShortId, Platform, normalizeUser, getLastClosedPrice, getRecentSearchPrices, getRecentClosedPrices, removeVietnameseAccents } from '../lib/core';
 import { CustomerAvatar } from './UserAvatar';
 import { openPancakeApp, parsePancakeContact } from '../lib/pancakeDeepLink';
 import { getCustomerInsight, getOrderStatusLabel, getPartnerStatusLabel, syncSingleCustomerPancakeOrders, checkCustomerPancakeShippedStatus, formatDateTime, parseOrderTimestamp, toStartOfDay } from '../lib/pancakeSync';
@@ -65,10 +65,100 @@ function DeleteConfirmButton({ onDelete, className = "" }: { onDelete: () => voi
     );
 }
 
+export function PriceIncrementButton({
+    priceK,
+    customLabel,
+    quantity,
+    onClick,
+    title = "Bấm vào giá để tăng số lượng (+1 SL)",
+    className = ""
+}: {
+    priceK?: number;
+    customLabel?: string;
+    quantity?: number;
+    onClick: (e: React.MouseEvent) => void;
+    title?: string;
+    className?: string;
+}) {
+    const [isRecentlyIncreased, setIsRecentlyIncreased] = useState(false);
+    const [hasBeenClicked, setHasBeenClicked] = useState(false);
+    const [animKey, setAnimKey] = useState(0);
+    const timerRef = useRef<any>(null);
+
+    // Reset nếu số lượng giảm về 1 (ví dụ sửa qua popup chỉnh sửa)
+    useEffect(() => {
+        if (quantity !== undefined && quantity <= 1) {
+            setHasBeenClicked(false);
+        }
+    }, [quantity]);
+
+    const handleClick = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        setHasBeenClicked(true);
+        setIsRecentlyIncreased(true);
+        setAnimKey(prev => prev + 1);
+
+        try {
+            if (typeof navigator !== 'undefined' && navigator.vibrate) {
+                navigator.vibrate([25, 35, 25]);
+            }
+        } catch {}
+
+        if (timerRef.current) clearTimeout(timerRef.current);
+        timerRef.current = setTimeout(() => {
+            setIsRecentlyIncreased(false);
+        }, 1800);
+
+        onClick(e);
+    };
+
+    useEffect(() => {
+        return () => {
+            if (timerRef.current) clearTimeout(timerRef.current);
+        };
+    }, []);
+
+    const displayContent = customLabel !== undefined ? customLabel : `${priceK}k`;
+    const isRed = (quantity !== undefined && quantity >= 2) || hasBeenClicked || isRecentlyIncreased;
+    const currentQty = (quantity !== undefined && quantity >= 1) ? quantity : 2;
+
+    if (isRed) {
+        return (
+            <button
+                key={`pop-red-${animKey}`}
+                type="button"
+                onClick={handleClick}
+                title={`Đã tăng SL (x${currentQty}). Bấm tiếp để tăng thêm (+1 SL)`}
+                className={`bg-red-600 hover:bg-red-500 active:scale-95 border-2 border-red-200 text-white font-mono font-black text-xs sm:text-sm px-2 py-1 rounded-lg min-w-[48px] sm:min-w-[56px] text-right cursor-pointer shadow-xl shadow-red-950/90 ring-2 ring-red-400 ring-offset-1 ring-offset-[#0e1621] transition-all flex items-center justify-end gap-1 select-none ${isRecentlyIncreased ? 'animate-pop-red-jump' : ''} ${className}`}
+            >
+                <span className={`text-[10px] font-sans font-black bg-white text-red-600 px-1 py-0.5 rounded shadow-sm leading-none shrink-0 ${isRecentlyIncreased ? 'animate-pulse' : ''}`}>
+                    {isRecentlyIncreased ? '+1' : `x${currentQty}`}
+                </span>
+                <span className="font-mono tracking-tight font-black">{displayContent}</span>
+            </button>
+        );
+    }
+
+    return (
+        <button
+            type="button"
+            onClick={handleClick}
+            title={title}
+            className={`group/price bg-emerald-950/60 hover:bg-emerald-900/90 active:scale-90 border border-emerald-500/40 hover:border-emerald-400 px-2 py-1 rounded-lg text-emerald-300 hover:text-white font-mono font-black text-xs sm:text-sm min-w-[38px] sm:min-w-[46px] text-right cursor-pointer transition-all shadow-xs flex items-center justify-end gap-1 select-none ${className}`}
+        >
+            <span className="text-[10px] text-emerald-400/80 group-hover/price:text-white font-sans font-bold opacity-0 group-hover/price:opacity-100 transition-opacity">
+                +1
+            </span>
+            <span>{displayContent}</span>
+        </button>
+    );
+}
+
 export interface EditingPriceQtyTarget {
     platform: Platform;
     user: string;
     itemIndex: number;
+    itemId?: string;
     content: string;
     unitPrice: number;
     quantity: number;
@@ -88,17 +178,26 @@ export function QuickPriceQtyModal({
     const [price, setPrice] = useState<number | string>(target.unitPrice);
     const [qty, setQty] = useState<number>(target.quantity || 1);
 
+    useEffect(() => {
+        if (target) {
+            setPrice(target.unitPrice);
+            setQty(target.quantity || 1);
+        }
+    }, [target]);
+
     const numericPrice = typeof price === 'number' ? price : (parseInt(String(price).replace(/\D/g, '')) || 0);
     const currentTotalK = numericPrice * (qty || 1);
 
     const handleSave = () => {
+        if (!target) return;
         store.updateOrderItemPriceAndQuantity(
             target.platform,
             target.user,
             target.itemIndex,
             numericPrice,
             qty,
-            target.isPast
+            target.isPast,
+            target.itemId
         );
         onClose();
     };
@@ -538,14 +637,21 @@ export function PriceModal({ pendingPrint, onClose }: { pendingPrint: { id: stri
     );
 }
 
-export function ManualModal({ onClose, onOpenProfile, isPage }: { onClose: () => void, onOpenProfile: (u: string, p: Platform) => void, isPage?: boolean }) {
+export function ManualModal({ onClose, onOpenProfile, isPage, initialSearch }: { onClose: () => void, onOpenProfile: (u: string, p: Platform) => void, isPage?: boolean, initialSearch?: string }) {
     const store = useStore();
     const [platform, setPlatform] = useState<Platform>('tiktok');
-    const [user, setUser] = useState('');
+    const [user, setUser] = useState(initialSearch && !initialSearch.startsWith('/') ? initialSearch : '');
     const [content, setContent] = useState('');
     const [price, setPrice] = useState('');
     const [showSuggestions, setShowSuggestions] = useState(false);
     const inputRef = useRef<HTMLInputElement>(null);
+
+    useEffect(() => {
+        if (initialSearch && !initialSearch.startsWith('/')) {
+            setUser(initialSearch);
+            setShowSuggestions(true);
+        }
+    }, [initialSearch]);
 
     useEffect(() => {
         if (!isPage) {
@@ -556,6 +662,7 @@ export function ManualModal({ onClose, onOpenProfile, isPage }: { onClose: () =>
     const suggestions = useMemo(() => {
         if (!user.trim()) return [];
         const keyword = user.trim().toLowerCase();
+        const kwNoAccent = removeVietnameseAccents(keyword);
         const custs = store[platform].customers;
         const nicks = store[platform].nicknames || {};
         const tags = store[platform].tags || {};
@@ -565,9 +672,16 @@ export function ManualModal({ onClose, onOpenProfile, isPage }: { onClose: () =>
             const nickname = nicks[username] || '';
             const tag = tags[username] || 'NORMAL';
             const shortId = getShortId(username).toLowerCase();
+            const uLower = username.toLowerCase();
+            const uNoAccent = removeVietnameseAccents(uLower);
+            const nickLower = nickname.toLowerCase();
+            const nickNoAccent = removeVietnameseAccents(nickLower);
+
             if (
-                username.toLowerCase().includes(keyword) || 
-                nickname.toLowerCase().includes(keyword) ||
+                uLower.includes(keyword) || 
+                uNoAccent.includes(kwNoAccent) ||
+                nickLower.includes(keyword) ||
+                nickNoAccent.includes(kwNoAccent) ||
                 shortId.includes(keyword) ||
                 ('#' + shortId).includes(keyword)
             ) {
@@ -777,7 +891,12 @@ export function ListModal({ filterPlatform, onClose, onOpenProfile, onOpenPrice,
     const effectiveListSearch = (listSearch || searchKeyword || '').trim().toLowerCase();
 
     const allRows = useMemo(() => {
-        let rows: {user: string, platform: Platform, c: CustomerData, displayItems: OrderItem[], originalIndices: number[]}[] = [];
+        let rows: {
+            user: string;
+            platform: Platform;
+            c: CustomerData;
+            displayItems: (OrderItem & { _realIndex: number; _isPast: boolean })[];
+        }[] = [];
         (['tiktok', 'facebook', 'shopee'] as Platform[]).forEach(p => {
             if (filterPlatform && p !== filterPlatform) return;
             const custs = store[p].customers;
@@ -786,21 +905,24 @@ export function ListModal({ filterPlatform, onClose, onOpenProfile, onOpenPrice,
                 const cust = custs[rawUser];
                 if (!cust) return;
 
-                // 1. Loại bỏ đơn hàng / sản phẩm trùng lặp ID (đảm bảo mỗi ID chỉ hiển thị 1 lần duy nhất trong giỏ hàng)
-                const uniqueCurrent = deduplicateOrderItems(cust.items || []);
-                const uniquePast = deduplicateOrderItems(cust.pastItems || []);
+                const currentWithMeta = (cust.items || []).map((it, idx) => ({
+                    ...it,
+                    _realIndex: idx,
+                    _isPast: false
+                }));
+                const pastWithMeta = (cust.pastItems || []).map((it, idx) => ({
+                    ...it,
+                    _realIndex: idx,
+                    _isPast: true
+                }));
 
-                let displayItems: OrderItem[] = [];
-                let originalIndices: number[] = [];
+                let displayItems: (OrderItem & { _realIndex: number; _isPast: boolean })[] = [];
 
                 if (dateFilter === 'all') {
-                    displayItems = uniqueCurrent;
-                    originalIndices = uniqueCurrent.map((_, i) => i);
+                    displayItems = currentWithMeta;
                 } else {
-                    // Khi lọc theo ngày: lọc các món trong phiên này và cả phiên cũ phù hợp với ngày được chọn
-                    const allItems = [...uniqueCurrent, ...uniquePast];
+                    const allItems = [...currentWithMeta, ...pastWithMeta];
                     displayItems = allItems.filter(it => isTimestampInDateFilter(getItemTimestamp(it, cust.lastTime)));
-                    originalIndices = displayItems.map(it => uniqueCurrent.findIndex(ci => ci.id === it.id));
                 }
 
                 if (displayItems.length > 0) {
@@ -815,8 +937,7 @@ export function ListModal({ filterPlatform, onClose, onOpenProfile, onOpenPrice,
                             total,
                             items: displayItems
                         },
-                        displayItems,
-                        originalIndices
+                        displayItems
                     });
                 }
             });
@@ -824,6 +945,7 @@ export function ListModal({ filterPlatform, onClose, onOpenProfile, onOpenPrice,
 
         if (effectiveListSearch) {
             const query = effectiveListSearch;
+            const queryNoAccent = removeVietnameseAccents(query);
             const isIdQuery = query.startsWith('#') || /^\d+$/.test(query);
             const targetId = query.startsWith('#') ? query.slice(1) : query;
 
@@ -844,7 +966,27 @@ export function ListModal({ filterPlatform, onClose, onOpenProfile, onOpenPrice,
                     return shortId === targetId || ('#' + shortId) === query;
                 }
 
-                return r.user.toLowerCase().includes(query) || nick.toLowerCase().includes(query);
+                const userLower = r.user.toLowerCase();
+                const userNoAccent = removeVietnameseAccents(userLower);
+                const nickLower = nick.toLowerCase();
+                const nickNoAccent = removeVietnameseAccents(nickLower);
+
+                // Khớp theo tên hoặc biệt danh (có/không dấu)
+                if (
+                    userLower.includes(query) || 
+                    userNoAccent.includes(queryNoAccent) || 
+                    nickLower.includes(query) || 
+                    nickNoAccent.includes(queryNoAccent)
+                ) {
+                    return true;
+                }
+
+                // Khớp theo nội dung món hàng đã chốt trong giỏ
+                const matchItem = r.displayItems.some(it => {
+                    const cStr = (it.content || '').toLowerCase();
+                    return cStr.includes(query) || removeVietnameseAccents(cStr).includes(queryNoAccent);
+                });
+                return matchItem;
             });
         }
 
@@ -1017,11 +1159,31 @@ export function ListModal({ filterPlatform, onClose, onOpenProfile, onOpenPrice,
                     </div>
                 </div>
                 
+                {/* Thanh kết quả tìm kiếm trực tiếp trên trang Giỏ hàng */}
+                {effectiveListSearch && (
+                    <div className="bg-blue-950/80 border-b border-blue-500/40 px-3 py-1.5 flex items-center justify-between text-xs text-blue-200 shrink-0">
+                        <span className="flex items-center gap-1.5 font-bold truncate">
+                            <span>🛒</span>
+                            <span>Tìm thấy <strong className="text-white font-black text-sm">{allRows.length}</strong> giỏ hàng khớp "{effectiveListSearch}"</span>
+                        </span>
+                        <span className="text-[10px] text-blue-300 font-medium px-2 py-0.5 rounded-full bg-blue-900/60 border border-blue-500/30 shrink-0">
+                            Đang lọc giỏ hàng
+                        </span>
+                    </div>
+                )}
+                
                 <div className="overflow-y-auto flex-1 p-2 sm:p-4 bg-[#0e1621] pb-24" onScroll={handleScroll}>
                     {allRows.length === 0 ? (
                         <div className="text-center text-gray-400 py-16 bg-[#1c242f]/50 rounded-2xl border border-dashed border-white/10">
-                            <div className="text-3xl mb-2">🛒</div>
-                            <div className="text-sm font-medium">Chưa có đơn chốt nào trong phiên này</div>
+                            <div className="text-3xl mb-2">{effectiveListSearch ? '🔍' : '🛒'}</div>
+                            <div className="text-sm font-bold text-white">
+                                {effectiveListSearch ? `Không tìm thấy giỏ hàng nào khớp với "${effectiveListSearch}"` : 'Chưa có đơn chốt nào trong phiên này'}
+                            </div>
+                            {effectiveListSearch && (
+                                <div className="text-xs text-gray-400 mt-1">
+                                    Thử tìm theo tên khách, biệt danh, mã #id hoặc tên món đã chốt trong giỏ
+                                </div>
+                            )}
                         </div>
                     ) : viewMode === 'grid' ? (
                         /* CHẾ ĐỘ XEM DẠNG Ô VUÔNG (SQUARE TILES GRID) CHO GIỎ HÀNG */
@@ -1295,7 +1457,6 @@ export function ListModal({ filterPlatform, onClose, onOpenProfile, onOpenPrice,
                                     ) : (
                                         [...row.displayItems].reverse().map((item, reversedIdx) => {
                                             const itemIdx = row.displayItems.length - 1 - reversedIdx;
-                                            const originalIdx = row.originalIndices ? row.originalIndices[itemIdx] : itemIdx;
                                             const itemUnitPrice = item.unitPrice || (item.quantity && item.price ? Math.round(item.price / item.quantity) : item.price);
                                             const itemQty = item.quantity || 1;
                                             const itemTotalK = item.price || (itemUnitPrice * itemQty);
@@ -1309,14 +1470,15 @@ export function ListModal({ filterPlatform, onClose, onOpenProfile, onOpenPrice,
                                             <div key={item.id || `disp-${itemIdx}`} className="flex justify-between items-center py-1.5 px-2.5 rounded-xl bg-[#121c28] border border-white/10 gap-2 mb-1">
                                                 {/* Bấm vào nội dung cmt để mở popup sửa Giá × SL */}
                                                 <div 
-                                                    onClick={() => originalIdx >= 0 && setEditingPriceQty({
+                                                    onClick={() => setEditingPriceQty({
                                                         platform: row.platform,
                                                         user: row.user,
-                                                        itemIndex: originalIdx,
+                                                        itemIndex: item._realIndex,
+                                                        itemId: item.id,
                                                         content: fullCommentContent,
                                                         unitPrice: itemUnitPrice,
                                                         quantity: itemQty,
-                                                        isPast: false
+                                                        isPast: item._isPast
                                                     })}
                                                     className="flex-1 min-w-0 flex items-center gap-1.5 cursor-pointer group hover:bg-white/5 py-1 px-1.5 -my-1 -ml-1 rounded-lg transition-colors select-none"
                                                     title="Bấm vào cmt để chỉnh sửa Giá × Số lượng"
@@ -1325,17 +1487,33 @@ export function ListModal({ filterPlatform, onClose, onOpenProfile, onOpenPrice,
                                                     <span className="text-gray-100 font-bold text-xs sm:text-sm truncate group-hover:text-cyan-300 transition-colors">
                                                         {fullCommentContent}
                                                     </span>
-                                                    {/* Khi có số lượng từ 2 trở lên thì (giá x sl) đằng sau cmt */}
+                                                    {/* Khi có số lượng từ 2 trở lên thì (giá) đằng sau cmt (đã bỏ x sl) */}
                                                     {itemQty >= 2 && (
                                                         <span className="text-cyan-300 font-mono font-bold text-xs shrink-0 bg-cyan-950/60 px-1.5 py-0.2 rounded border border-cyan-500/30">
-                                                            ({itemUnitPrice}k × {itemQty})
+                                                            ({itemUnitPrice}k)
                                                         </span>
                                                     )}
                                                 </div>
 
-                                                {/* Phía sau: Tổng tiền + Nút In + Nút Xóa (Gọn gàng 1 dòng không bao giờ xuống dòng) */}
-                                                <div className="flex items-center gap-2 shrink-0">
-                                                    <span className="text-emerald-400 font-mono font-black text-sm min-w-[42px] text-right">{itemTotalK}k</span>
+                                                {/* Phía sau: Tổng tiền (BẤM VÀO ĐỂ TĂNG SL +1 NỔI ĐỎ) + Nút In + Nút Xóa */}
+                                                <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                                                    <PriceIncrementButton
+                                                        priceK={itemTotalK}
+                                                        quantity={itemQty}
+                                                        onClick={() => {
+                                                            store.updateOrderItemQuantity(
+                                                                row.platform, 
+                                                                row.user, 
+                                                                item._realIndex, 
+                                                                itemQty + 1, 
+                                                                item._isPast, 
+                                                                item.id
+                                                            );
+                                                            if (typeof navigator !== 'undefined' && navigator.vibrate) {
+                                                                try { navigator.vibrate(12); } catch {}
+                                                            }
+                                                        }}
+                                                    />
                                                     <button 
                                                         onClick={() => {
                                                             let time = new Date().toLocaleTimeString('vi-VN', {hour:'2-digit',minute:'2-digit'});
@@ -1347,12 +1525,16 @@ export function ListModal({ filterPlatform, onClose, onOpenProfile, onOpenPrice,
                                                     >
                                                         🖨️ IN
                                                     </button>
-                                                    {originalIdx >= 0 && (
-                                                        <DeleteConfirmButton 
-                                                            onDelete={() => store.deleteOrderItem(row.platform, row.user, originalIdx)}
-                                                            className="rounded-lg px-2 py-1"
-                                                        />
-                                                    )}
+                                                    <DeleteConfirmButton 
+                                                        onDelete={() => store.deleteOrderItem(
+                                                            row.platform, 
+                                                            row.user, 
+                                                            item._realIndex, 
+                                                            item._isPast, 
+                                                            item.id
+                                                        )}
+                                                        className="rounded-lg px-2 py-1"
+                                                    />
                                                 </div>
                                             </div>
                                             );
@@ -1380,13 +1562,15 @@ export function LiveEfficiencyModal({
     onOpenProfile,
     onOpenPrice,
     isPage,
-    onScroll
+    onScroll,
+    searchKeyword
 }: {
     onClose?: () => void;
     onOpenProfile?: (u: string, p: Platform) => void;
     onOpenPrice?: (id: string | null, u: string, p: Platform) => void;
     isPage?: boolean;
     onScroll?: (isDown: boolean) => void;
+    searchKeyword?: string;
 }) {
     const store = useStore();
     const [timeRange, setTimeRange] = useState<'today' | 'yesterday' | '7days' | 'all'>('today');
@@ -1780,8 +1964,8 @@ export function LiveEfficiencyModal({
                             </span>
                         </div>
 
-                        {/* Search Bar when a category is selected or if list is large */}
-                        {selectedCategory && (
+                        {/* Search Bar when a category is selected */}
+                        {selectedCategory && !searchKeyword && (
                             <div>
                                 <input
                                     type="text"
@@ -1793,15 +1977,41 @@ export function LiveEfficiencyModal({
                             </div>
                         )}
 
-                        {/* Table List Rows */}
-                        {((selectedCategory ? activeCategoryList : customersByRevenue).length === 0) ? (
-                            <div className="text-xs text-gray-400 italic text-center py-6">
-                                {selectedCategory && categorySearch ? 'Không tìm thấy khách hàng phù hợp' : 'Chưa có dữ liệu khách hàng'}
-                            </div>
-                        ) : (
-                            <div className="space-y-2 max-h-[480px] overflow-y-auto pr-0.5 hide-scrollbar">
-                                {(selectedCategory ? activeCategoryList : customersByRevenue).map((row, idx) => {
-                                    const cleanUser = normalizeUser(row.user);
+                        {(() => {
+                            const effectiveEffSearch = (searchKeyword || categorySearch).trim().toLowerCase();
+                            const effNoAccent = removeVietnameseAccents(effectiveEffSearch);
+                            const baseList = selectedCategory ? activeCategoryList : customersByRevenue;
+                            const displayRows = effectiveEffSearch ? baseList.filter(row => {
+                                const clean = normalizeUser(row.user);
+                                const nick = store[row.platform].nicknames?.[clean] || '';
+                                const sid = getShortId(clean).toLowerCase();
+                                const uLow = clean.toLowerCase();
+                                const uNo = removeVietnameseAccents(uLow);
+                                const nLow = nick.toLowerCase();
+                                const nNo = removeVietnameseAccents(nLow);
+                                return uLow.includes(effectiveEffSearch) || uNo.includes(effNoAccent) ||
+                                       nLow.includes(effectiveEffSearch) || nNo.includes(effNoAccent) ||
+                                       sid.includes(effectiveEffSearch) || ('#' + sid).includes(effectiveEffSearch);
+                            }) : baseList;
+
+                            return (
+                                <>
+                                    {effectiveEffSearch && (
+                                        <div className="bg-purple-950/70 border border-purple-500/30 px-3 py-1.5 rounded-xl text-xs text-purple-200 flex items-center justify-between">
+                                            <span>🔍 Lọc khách hàng: <strong className="text-white">"{effectiveEffSearch}"</strong></span>
+                                            <span className="font-bold text-purple-300 font-mono">({displayRows.length} khách)</span>
+                                        </div>
+                                    )}
+
+                                    {/* Table List Rows */}
+                                    {displayRows.length === 0 ? (
+                                        <div className="text-xs text-gray-400 italic text-center py-6">
+                                            {effectiveEffSearch ? 'Không tìm thấy khách hàng phù hợp' : 'Chưa có dữ liệu khách hàng'}
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-2 max-h-[480px] overflow-y-auto pr-0.5 hide-scrollbar">
+                                            {displayRows.map((row, idx) => {
+                                                const cleanUser = normalizeUser(row.user);
                                     const nickname = store[row.platform].nicknames?.[cleanUser];
                                     const displayName = nickname 
                                         ? `${cleanUser} (${nickname})` 
@@ -1856,9 +2066,12 @@ export function LiveEfficiencyModal({
                                         </div>
                                     );
                                 })}
-                            </div>
-                        )}
-                    </div>
+                                </div>
+                            )}
+                        </>
+                    );
+                })()}
+            </div>
 
                     {/* Top Products By Price */}
                     <div className="bg-[#1c242f] p-4 rounded-2xl border border-white/10 shadow-sm">
@@ -1961,7 +2174,6 @@ export function LiveEfficiencyModal({
 }
 
 export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPancakeLink }: { user: string, platform: Platform, onClose: () => void, onOpenPrice?: (id: string | null, u: string, p: Platform) => void, onOpenPancakeLink?: (user: string, platform: Platform, initialSearch?: string) => void }) {
-    const { modalStyle, touchHandlers } = useSwipeToDismiss({ onClose });
     const store = useStore();
     const cleanUser = normalizeUser(user);
     
@@ -1982,6 +2194,12 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
     const [isPushModalOpen, setIsPushModalOpen] = useState(false);
     const [isCalculatorOpen, setIsCalculatorOpen] = useState(false);
     const [editingPriceQty, setEditingPriceQty] = useState<EditingPriceQtyTarget | null>(null);
+
+    const isChildOpen = Boolean(isCalculatorOpen || isPushModalOpen || editingPriceQty);
+    const { modalStyle, touchHandlers } = useSwipeToDismiss({ 
+        onClose, 
+        enabled: !isChildOpen 
+    });
 
     const totalSelectedCount = selectedCurrent.size + selectedPast.size;
     const totalSelectedPriceK = 
@@ -2046,28 +2264,33 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
                 </div>
                 
                 {/* Sticky Profile Header */}
-                <div className="px-4 pb-3 pt-3 bg-[#1c242f] shrink-0 border-b border-white/5 shadow-sm relative z-10">
-                    <div className="flex items-start gap-3">
-                        {/* Avatar on left */}
+                <div className="px-4 pb-3 pt-3 bg-[#1c242f] shrink-0 border-b border-white/10 shadow-sm relative z-10 space-y-2.5">
+                    {/* Hàng 1: Avatar + Tên khách + Nút Thêm Món + Nickname */}
+                    <div className="flex items-center gap-3">
+                        {/* Avatar */}
                         <div className="shrink-0">
                             <CustomerAvatar 
                                 user={cleanUser} 
                                 platform={platform} 
                                 avatarUrl={avatarUrl} 
                                 tag={tag} 
-                                size="xl" 
+                                size="lg" 
                             />
                         </div>
                         
-                        {/* Information on right */}
-                        <div className="flex-1 min-w-0 flex flex-col justify-between h-20">
-                            {/* ID and Name & Thêm Món */}
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                                <span className="text-[10px] font-black text-gray-500 bg-[#1c242f] px-1 py-0.5 rounded border border-white/10 shadow-sm shrink-0">
-                                    #{getShortId(cleanUser)}
-                                </span>
-                                <div className="text-base font-black text-white truncate leading-tight text-left">{cleanUser}</div>
-                                <CopyButton text={store[platform].nicknames?.[cleanUser] ? `${cleanUser} (${store[platform].nicknames[cleanUser]})` : `#${getShortId(cleanUser)} ${cleanUser}`} className="text-sm shrink-0 text-gray-400 hover:text-gray-100" />
+                        {/* Tên & Nickname */}
+                        <div className="flex-1 min-w-0 space-y-1.5">
+                            {/* Dòng tên & ID & Thêm món */}
+                            <div className="flex items-center justify-between gap-1.5">
+                                <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                                    <span className="text-[10px] font-mono font-black text-gray-400 bg-black/40 px-1.5 py-0.5 rounded border border-white/10 shrink-0">
+                                        #{getShortId(cleanUser)}
+                                    </span>
+                                    <span className="text-sm sm:text-base font-black text-white truncate leading-tight">
+                                        {cleanUser}
+                                    </span>
+                                    <CopyButton text={store[platform].nicknames?.[cleanUser] ? `${cleanUser} (${store[platform].nicknames[cleanUser]})` : `#${getShortId(cleanUser)} ${cleanUser}`} className="text-xs shrink-0 text-gray-400 hover:text-white" />
+                                </div>
                                 
                                 <button
                                     type="button"
@@ -2076,7 +2299,7 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
                                         setIsCalculatorOpen(true);
                                     }}
                                     title="Thêm món mới (Mở bảng tính Đơn giá x SL)"
-                                    className="text-emerald-300 hover:text-white bg-emerald-950/70 hover:bg-emerald-600/50 active:scale-95 px-2.5 py-0.5 rounded-lg border border-emerald-500/50 transition-all cursor-pointer inline-flex items-center gap-1 font-black text-xs shadow-sm shrink-0"
+                                    className="text-white bg-emerald-600 hover:bg-emerald-500 active:scale-95 px-2.5 py-1 rounded-lg border border-emerald-400/50 transition-all cursor-pointer inline-flex items-center gap-1 font-black text-xs shadow-md shrink-0"
                                 >
                                     <Plus size={13} className="stroke-[3]" />
                                     <span>Thêm món</span>
@@ -2090,63 +2313,63 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
                                     value={nickname}
                                     onChange={e => setNickname(e.target.value)}
                                     onBlur={() => store.setCustomerNickname(platform, cleanUser, nickname.trim())}
-                                    placeholder="Tên gợi nhớ..."
-                                    className="w-full py-1.5 px-2.5 bg-[#0e1621] border border-white/20 rounded-md font-bold text-white placeholder-gray-400 text-xs focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all"
+                                    placeholder="Tên gợi nhớ (nickname)..."
+                                    className="w-full py-1 px-2.5 bg-[#0e1621] border border-white/15 focus:border-blue-400 rounded-lg font-bold text-amber-200 placeholder-gray-500 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400 transition-all"
                                 />
                             </div>
-
-                            {/* Stats */}
-                            {(() => {
-                                const activeInsight = (insight || getCustomerInsight(cleanUser));
-                                const sStat = checkCustomerPancakeShippedStatus(cust, activeInsight);
-                                const currentItems = cust?.items || [];
-                                const pastItems = cust?.pastItems || [];
-
-                                // 1. Đang chốt (nghĩa là đơn đang chốt hôm nay)
-                                const activeItems = sStat.isAllShipped ? [] : currentItems.filter(it => !it.shipped);
-                                const dangChotQty = activeItems.reduce((sum, it) => sum + (it.quantity || 1), 0);
-                                const dangChotTotal = activeItems.reduce((sum, it) => sum + (it.price || 0), 0);
-
-                                // 2. Đang giữ đơn (nghĩa là đơn đang chốt các phiên trước)
-                                const holdingItems = sStat.isAllShipped ? [] : pastItems.filter(it => !it.shipped);
-                                const dangGiuQty = holdingItems.reduce((sum, it) => sum + (it.quantity || 1), 0);
-                                const dangGiuTotal = holdingItems.reduce((sum, it) => sum + (it.price || 0), 0);
-
-                                // 3. Đã chốt = TỔNG của "Đang chốt" và "Đang giữ" cộng lại cả số lượng và thành tiền
-                                const daChotQty = sStat.isAllShipped ? 0 : (dangChotQty + dangGiuQty);
-                                const daChotTotal = sStat.isAllShipped ? 0 : (dangChotTotal + dangGiuTotal);
-
-                                return (
-                                    <div className="space-y-1">
-                                        <div className="grid grid-cols-2 gap-2">
-                                            <div className="bg-blue-950/70 border border-blue-500/40 py-1 px-1.5 rounded-lg flex items-center justify-between shadow-xs">
-                                                <span className="text-[9px] font-bold text-blue-300">ĐÃ CHỐT:</span>
-                                                <span className="text-[11px] font-black text-blue-200 font-mono leading-none">
-                                                    {daChotQty} cái
-                                                    {sStat.isAllShipped && <span className="text-[9px] text-emerald-400 font-bold ml-1">✓ Đã đi</span>}
-                                                </span>
-                                            </div>
-                                            <div className="bg-emerald-950/70 border border-emerald-500/40 py-1 px-1.5 rounded-lg flex items-center justify-between shadow-xs">
-                                                <span className="text-[9px] font-bold text-emerald-300">TỔNG TIỀN:</span>
-                                                <span className="text-[11px] font-black text-emerald-300 font-mono leading-none">
-                                                    {daChotTotal}k
-                                                    {sStat.isAllShipped && <span className="text-[9px] text-emerald-400 font-bold ml-1">(0k nợ)</span>}
-                                                </span>
-                                            </div>
-                                        </div>
-                                        {(dangChotQty > 0 || dangGiuQty > 0) && !sStat.isAllShipped && (
-                                            <div className="text-[10px] text-gray-400 flex items-center justify-between px-0.5">
-                                                <span>🛍️ Đang chốt: <strong className="text-cyan-300 font-mono">{dangChotQty} cái ({dangChotTotal}k)</strong></span>
-                                                {dangGiuQty > 0 && (
-                                                    <span>⏳ Đang giữ: <strong className="text-amber-300 font-mono">{dangGiuQty} cái ({dangGiuTotal}k)</strong></span>
-                                                )}
-                                            </div>
-                                        )}
-                                    </div>
-                                );
-                            })()}
                         </div>
                     </div>
+
+                    {/* Hàng 2: Card Tổng hợp Đã Chốt & Tổng Tiền */}
+                    {(() => {
+                        const activeInsight = (insight || getCustomerInsight(cleanUser));
+                        const sStat = checkCustomerPancakeShippedStatus(cust, activeInsight);
+                        const currentItems = cust?.items || [];
+                        const pastItems = cust?.pastItems || [];
+
+                        // 1. Đang chốt (nghĩa là đơn đang chốt hôm nay)
+                        const activeItems = sStat.isAllShipped ? [] : currentItems.filter(it => !it.shipped);
+                        const dangChotQty = activeItems.reduce((sum, it) => sum + (it.quantity || 1), 0);
+                        const dangChotTotal = activeItems.reduce((sum, it) => sum + (it.price || 0), 0);
+
+                        // 2. Đang giữ đơn (nghĩa là đơn đang chốt các phiên trước)
+                        const holdingItems = sStat.isAllShipped ? [] : pastItems.filter(it => !it.shipped);
+                        const dangGiuQty = holdingItems.reduce((sum, it) => sum + (it.quantity || 1), 0);
+                        const dangGiuTotal = holdingItems.reduce((sum, it) => sum + (it.price || 0), 0);
+
+                        // 3. Đã chốt = TỔNG của "Đang chốt" và "Đang giữ" cộng lại cả số lượng và thành tiền
+                        const daChotQty = sStat.isAllShipped ? 0 : (dangChotQty + dangGiuQty);
+                        const daChotTotal = sStat.isAllShipped ? 0 : (dangChotTotal + dangGiuTotal);
+
+                        return (
+                            <div className="bg-[#0e1621] border border-white/10 rounded-xl p-2.5 shadow-sm space-y-1.5">
+                                <div className="grid grid-cols-2 gap-2">
+                                    <div className="bg-blue-950/60 border border-blue-500/30 py-1.5 px-2 rounded-lg flex items-center justify-between">
+                                        <span className="text-[10px] font-bold text-blue-300">ĐÃ CHỐT:</span>
+                                        <span className="text-xs sm:text-sm font-black text-blue-200 font-mono leading-none flex items-center gap-1">
+                                            <span>{daChotQty} cái</span>
+                                            {sStat.isAllShipped && <span className="text-[9px] text-emerald-400 font-bold ml-1">✓ Đã đi</span>}
+                                        </span>
+                                    </div>
+                                    <div className="bg-emerald-950/60 border border-emerald-500/30 py-1.5 px-2 rounded-lg flex items-center justify-between">
+                                        <span className="text-[10px] font-bold text-emerald-300">TỔNG TIỀN:</span>
+                                        <span className="text-xs sm:text-sm font-black text-emerald-300 font-mono leading-none">
+                                            {daChotTotal}k
+                                            {sStat.isAllShipped && <span className="text-[9px] text-emerald-400 font-bold ml-1">(0k nợ)</span>}
+                                        </span>
+                                    </div>
+                                </div>
+                                {(dangChotQty > 0 || dangGiuQty > 0) && !sStat.isAllShipped && (
+                                    <div className="text-[11px] text-gray-400 flex items-center justify-between px-1 pt-1 border-t border-white/5">
+                                        <span>🛍️ Đang chốt: <strong className="text-cyan-300 font-mono">{dangChotQty} cái ({dangChotTotal}k)</strong></span>
+                                        {dangGiuQty > 0 && (
+                                            <span>⏳ Đang giữ: <strong className="text-amber-300 font-mono">{dangGiuQty} cái ({dangGiuTotal}k)</strong></span>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })()}
                 </div>
                 
                 <div className="overflow-y-auto flex-1 px-4 pt-4 pb-5">
@@ -2891,6 +3114,7 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
                                                                         platform,
                                                                         user: cleanUser,
                                                                         itemIndex: idx,
+                                                                        itemId: item.id,
                                                                         content: fullCommentContent,
                                                                         unitPrice: itemUnitPrice,
                                                                         quantity: itemQty,
@@ -2903,21 +3127,28 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
                                                                     <span className={`font-bold text-xs truncate ${item.shipped ? 'line-through text-gray-400' : 'text-amber-200 group-hover:text-cyan-300'}`}>
                                                                         {fullCommentContent}
                                                                     </span>
-                                                                    {/* Khi có số lượng từ 2 trở lên thì (giá x sl) đằng sau cmt */}
+                                                                    {/* Khi có số lượng từ 2 trở lên thì (giá) đằng sau cmt (đã bỏ x sl) */}
                                                                     {itemQty >= 2 && (
                                                                         <span className="text-cyan-300 font-mono font-bold text-xs shrink-0 bg-cyan-950/60 px-1.5 py-0.2 rounded border border-cyan-500/30">
-                                                                            ({itemUnitPrice}k × {itemQty})
+                                                                            ({itemUnitPrice}k)
                                                                         </span>
                                                                     )}
                                                                 </div>
                                                             </div>
 
-                                                            {/* Phải: Thành tiền + Nút Gửi + In + Xóa (tất cả trên 1 dòng duy nhất, siêu gọn gàng!) */}
+                                                            {/* Phải: Thành tiền (BẤM VÀO ĐỂ TĂNG SL +1 NỔI ĐỎ) + Nút Gửi + In + Xóa */}
                                                             <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
-                                                                {/* Thành tiền k */}
-                                                                <span className="text-emerald-400 font-mono font-black text-xs sm:text-sm min-w-[34px] sm:min-w-[42px] text-right">
-                                                                    {itemTotalK}k
-                                                                </span>
+                                                                {/* Thành tiền k - Click tăng SL +1 nhảy đỏ */}
+                                                                <PriceIncrementButton
+                                                                    priceK={itemTotalK}
+                                                                    quantity={itemQty}
+                                                                    onClick={() => {
+                                                                        store.updateOrderItemQuantity(platform, cleanUser, idx, itemQty + 1, false, item.id);
+                                                                        if (typeof navigator !== 'undefined' && navigator.vibrate) {
+                                                                            try { navigator.vibrate(12); } catch {}
+                                                                        }
+                                                                    }}
+                                                                />
 
                                                                 {/* Nút Trạng thái Gửi */}
                                                                 <button
@@ -3149,6 +3380,7 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
                                                                 platform,
                                                                 user: cleanUser,
                                                                 itemIndex: originalIdx,
+                                                                itemId: item.id,
                                                                 content: fullCommentContent,
                                                                 unitPrice: itemUnitPrice,
                                                                 quantity: itemQty,
@@ -3161,21 +3393,28 @@ export function ProfileModal({ user, platform, onClose, onOpenPrice, onOpenPanca
                                                             <span className={`font-bold text-xs truncate ${item.shipped ? 'line-through text-gray-400' : 'text-amber-200 group-hover:text-cyan-300'}`}>
                                                                 {fullCommentContent}
                                                             </span>
-                                                            {/* Khi có số lượng từ 2 trở lên thì (giá x sl) đằng sau cmt */}
+                                                            {/* Khi có số lượng từ 2 trở lên thì (giá) đằng sau cmt (đã bỏ x sl) */}
                                                             {itemQty >= 2 && (
                                                                 <span className="text-cyan-300 font-mono font-bold text-xs shrink-0 bg-cyan-950/60 px-1.5 py-0.2 rounded border border-cyan-500/30">
-                                                                    ({itemUnitPrice}k × {itemQty})
+                                                                    ({itemUnitPrice}k)
                                                                 </span>
                                                             )}
                                                         </div>
                                                     </div>
 
-                                                    {/* Phải: Thành tiền + Nút In + Xóa (tất cả trên 1 dòng!) */}
+                                                    {/* Phải: Thành tiền (BẤM VÀO ĐỂ TĂNG SL +1 NỔI ĐỎ) + Nút In + Xóa */}
                                                     <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
-                                                        {/* Thành tiền k */}
-                                                        <span className="text-emerald-400 font-mono font-black text-xs sm:text-sm min-w-[34px] sm:min-w-[42px] text-right">
-                                                            {itemTotalK}k
-                                                        </span>
+                                                        {/* Thành tiền k - Click tăng SL +1 nhảy đỏ */}
+                                                        <PriceIncrementButton
+                                                            priceK={itemTotalK}
+                                                            quantity={itemQty}
+                                                            onClick={() => {
+                                                                store.updateOrderItemQuantity(platform, cleanUser, originalIdx, itemQty + 1, true, item.id);
+                                                                if (typeof navigator !== 'undefined' && navigator.vibrate) {
+                                                                    try { navigator.vibrate(12); } catch {}
+                                                                }
+                                                            }}
+                                                        />
 
                                                         {/* Nút In */}
                                                         <button 
@@ -3479,10 +3718,18 @@ export function CustomersModal({
                 if (effectiveSearch === '/top10') return true;
                 if (effectiveSearch.startsWith('/')) return false;
 
+                const queryNoAccent = removeVietnameseAccents(effectiveSearch);
                 const nick = store[c.platform].nicknames?.[c.user] || '';
                 const shortId = getShortId(c.user).toLowerCase();
-                return c.user.toLowerCase().includes(effectiveSearch) ||
-                       nick.toLowerCase().includes(effectiveSearch) ||
+                const userLower = c.user.toLowerCase();
+                const userNoAccent = removeVietnameseAccents(userLower);
+                const nickLower = nick.toLowerCase();
+                const nickNoAccent = removeVietnameseAccents(nickLower);
+
+                return userLower.includes(effectiveSearch) ||
+                       userNoAccent.includes(queryNoAccent) ||
+                       nickLower.includes(effectiveSearch) ||
+                       nickNoAccent.includes(queryNoAccent) ||
                        shortId.includes(effectiveSearch) ||
                        ('#' + shortId).includes(effectiveSearch);
             });
@@ -3692,6 +3939,19 @@ export function CustomersModal({
                                 </button>
                             )}
                         </div>
+                    </div>
+                )}
+
+                {/* Thanh kết quả tìm kiếm trực tiếp trên trang Khách hàng */}
+                {effectiveSearch && (
+                    <div className="bg-emerald-950/80 border-b border-emerald-500/40 px-3 py-1.5 flex items-center justify-between text-xs text-emerald-200 shrink-0">
+                        <span className="flex items-center gap-1.5 font-bold truncate">
+                            <span>👥</span>
+                            <span>Tìm thấy <strong className="text-white font-black text-sm">{customerList.length}</strong> khách hàng khớp "{effectiveSearch}"</span>
+                        </span>
+                        <span className="text-[10px] text-emerald-300 font-medium px-2 py-0.5 rounded-full bg-emerald-900/60 border border-emerald-500/30 shrink-0">
+                            Đang lọc khách hàng
+                        </span>
                     </div>
                 )}
 
