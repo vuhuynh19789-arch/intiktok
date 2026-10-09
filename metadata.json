@@ -1,6 +1,6 @@
 {
-  "name": "in live da nen tang",
-  "description": "Ứng dụng chốt đơn livestream đa nền tảng và tự động cào dữ liệu bình luận TikTok Live theo thời gian thực",
+  "name": "Chốt Đơn Live",
+  "description": "Ứng dụng chốt đơn livestream đa nền tảng và quản lý đơn hàng TikTok, Facebook, Shopee",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

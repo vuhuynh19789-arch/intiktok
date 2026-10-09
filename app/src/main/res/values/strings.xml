@@ -1,0 +1,15 @@
+<resources>
+    <string name="app_name">Chốt Đơn Live</string>
+    <string name="tab_chat">Chat</string>
+    <string name="tab_cart">Giỏ hàng</string>
+    <string name="tab_customers">Khách hàng</string>
+    <string name="tab_efficiency">Hiệu quả</string>
+    <string name="tab_manual">Tạo mới</string>
+    <string name="search_hint">Tìm nội dung cmt, tên khách trên Live... (hoặc /top10)</string>
+    <string name="total_summary_label">TỔNG CHUNG</string>
+    <string name="unit_item">cái</string>
+    <string name="unit_k">k</string>
+    <string name="currency_suffix">.000đ</string>
+    <string name="status_connected">Đã kết nối (Realtime)</string>
+    <string name="status_connecting">Đang kết nối...</string>
+</resources>

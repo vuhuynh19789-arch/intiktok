@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.ChotDonLive" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">#1C242F</item>
+        <item name="android:navigationBarColor">#0E1621</item>
+        <item name="android:windowBackground">#0E1621</item>
+    </style>
+</resources>

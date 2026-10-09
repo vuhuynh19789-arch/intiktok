@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="primary_dark">#0E1621</color>
+    <color name="surface_dark">#1C242F</color>
+    <color name="card_dark">#232E3C</color>
+    <color name="accent_blue">#1877F2</color>
+    <color name="accent_tiktok">#00F2EA</color>
+    <color name="accent_shopee">#EE4D2D</color>
+    <color name="accent_green">#22C55E</color>
+    <color name="accent_red">#EF4444</color>
+</resources>
